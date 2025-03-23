@@ -124,8 +124,7 @@ def process_img(image):
     i3 = i2[:, :, :3] # remove alpha channel (height, width, channels(3))
     i4 = i3/255.0 # normalise 
     cv2.imshow("", i4) # show image
-    # plt.imshow(i4)
-    # plt.show()
+
     cv2.waitKey(10)
     return i4
 
