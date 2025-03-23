@@ -25,10 +25,41 @@ import random
 import time
 import numpy as np
 import cv2
+from collections import deque
+import tensorflow as tf
+from keras.applications.xception import Xception
+from keras.layers import Dense, GlobalAveragePooling2D
+from keras.optimizers import Adam
+from keras.models import Model
 
-IMG_WIDTH, IMG_HEIGHT = 640, 480
+# CONSTANTS
+
+# Image parameters
 SHOW_PREVIEW = False
+IMG_WIDTH, IMG_HEIGHT = 640, 480
+
+# RL parameters
 EPISODE_LENGTH = 10 #seconds
+
+REPLAY_MEMORY_SIZE = 5000
+MIN_REPLAY_SIZE = 1000
+MINIBATCH_SIZE = 16
+PREDICTION_BATCH_SIZE = 1
+TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
+UPDATE_TARGET_EVERY = 5
+MODEL_NAME = "Xception" ## TODO: INVESTIGATE MODELS
+
+MEMORY_FRACTION = 0.8 # allocates 80% of processing power to avoid overconsuption (test)
+MIN_REWARD = -200
+
+EPISODES = 100
+
+DISCOUNT = 0.99
+epsilon = 1
+EPSILON_DECAY = 0.95 ## tend towards 1.0 depeninding on # of steps
+MIN_EPSILON = 0.001
+
+AGGRIGATE_STATS_EVERY = 10
 
 class CarEnvironment:
     SHOW_CAMERA = SHOW_PREVIEW
@@ -36,8 +67,10 @@ class CarEnvironment:
 
     image_width = IMG_WIDTH
     image_height = IMG_HEIGHT
+    actor_list = []
 
     front_camera = None
+    collision_list = []
 
     # functions
     def collision_data(self, collision):
@@ -92,6 +125,7 @@ class CarEnvironment:
 
         # send vehicle control to improve agent response time
         self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
+        # avoid taking input during init
         time.sleep(4)
 
         # spawn collision sensor
@@ -149,5 +183,36 @@ class CarEnvironment:
         # self.collision_list = []  #remove?
 
         return self.front_camera, reward, done, None
+    
 
-print("yo")
+    class DQNAgent:
+        def __init__(self):
+            self.model = self.create_model()
+            self.target_model = self.create_model()
+            self.target_model.set_weights(self.model.get_weights())
+
+            self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
+
+            self.tensorboard = ModifiedTensorBoard(log_dir=f"logs/{MODEL_NAME}-{int(time.time())}") # by @sentdex, minimises unnecessary updates and exports, imporving performance
+            self.target_update_counter = 0
+            self.graph = tf.get_default.graph()
+
+            self.terminate = False
+            self.last_logged_episode = 0
+            self.training_initialised = False
+
+        def create_model(self):
+            # model can be built here manually
+            '''
+            model = tf.Sequential()
+            model.add()
+            '''
+            base_model = Xception(weights=None, include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH,3) )
+
+            x = base_model.output
+            x = GlobalAveragePooling2D()(x)
+
+            predictions = Dense(3, activation="linear")(x)
+            model = Model(inputs=base_model.input, outputs=predictions)
+            model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
+            return model
