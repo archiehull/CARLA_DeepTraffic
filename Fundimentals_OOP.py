@@ -1,4 +1,5 @@
-# FILE MUST RUN IN PYTHON 3.8
+# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0, Keras 2.2.4, CARLA 0.9.13
+
 from platform import python_version
 
 try:
@@ -7,15 +8,15 @@ except ImportError:
     print("\nCarla module not found")
     print("Make sure to run the command 'pip install carla'")
 
-    if python_version() != "3.8.0":
-        print("\nPython 3.8.0 is required to run this program")
+    if python_version() != "3.6.8":
+        print("\nPython 3.6.8 is required to run this program")
         print("Current Python Version: " + python_version())
 
         print("\nIf using VS code, use the command 'Ctrl + Shift + P'")
         print("Type 'Python: Select Interpreter'") 
-        print("Select Python 3.8.0")
+        print("Select Python 3.6.8")
 
-        print("\nIf you are using the command line, type 'python3.8' or 'py -3.8' instead of 'python'")
+        print("\nIf you are using the command line, type 'python3.6' or 'py -3.6' instead of 'python'")
 
     input("\nPress Enter to exit")
     exit()
@@ -27,14 +28,17 @@ import numpy as np
 import cv2
 from collections import deque
 import tensorflow as tf
-from keras.applications.xception import Xception
+from keras.applications.xception import Xception 
 from keras.layers import Dense, GlobalAveragePooling2D
 from keras.optimizers import Adam
 from keras.models import Model
 from keras.callbacks import TensorBoard
+import os
+from threading import Thread
 
-from keras.backend.tensorflow_backend as backend
-from threading import Threading
+import keras.backend.tensorflow_backend as backend   # Must use older version of Tensorflow
+
+from tqdm import tqdm
 
 # CONSTANTS
 
@@ -63,7 +67,7 @@ epsilon = 1
 EPSILON_DECAY = 0.95 ## tend towards 1.0 depeninding on # of steps
 MIN_EPSILON = 0.001
 
-AGGRIGATE_STATS_EVERY = 10
+AGGREGATE_STATS_EVERY = 10
 
 # Own Tensorboard class
 class ModifiedTensorBoard(TensorBoard):
@@ -221,103 +225,181 @@ class CarEnvironment:
         return self.front_camera, reward, done, None
     
 
-    class DQNAgent:
-        def __init__(self):
-            self.model = self.create_model()
-            self.target_model = self.create_model()
+class DQNAgent:
+    def __init__(self):
+        self.model = self.create_model()
+        self.target_model = self.create_model()
+        self.target_model.set_weights(self.model.get_weights())
+
+        self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
+
+        self.tensorboard = ModifiedTensorBoard(log_dir=f"logs/{MODEL_NAME}-{int(time.time())}") # by @sentdex, minimises unnecessary updates and exports, imporving performance
+        self.target_update_counter = 0
+        self.graph = tf.get_default_graph()
+
+        self.terminate = False
+        self.last_logged_episode = 0
+        self.training_initialised = False
+
+    def create_model(self):
+        # model can be built here manually
+        '''
+        model = tf.Sequential()
+        model.add()
+        '''
+        base_model = Xception(weights=None, include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH,3) )
+
+        x = base_model.output
+        x = GlobalAveragePooling2D()(x)
+
+        predictions = Dense(3, activation="linear")(x)
+        model = Model(inputs=base_model.input, outputs=predictions)
+        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
+        return model
+
+    def update_replay_memory(self, transition):
+        # transition = (current_state, action, reward, new_state, done)
+        self.replay_memory.append(transition)
+
+    def train(self):
+        if len(self.replay_memory) < MIN_REPLAY_SIZE:
+            return
+
+        minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
+
+        current_states = np.array([transition[0] for transition in minibatch])/255
+        with self.graph.as_default():
+            # predict current Q values for all states in minibatch
+            current_qs_list = self.model.predict(current_states, batch_size=PREDICTION_BATCH_SIZE)
+
+        new_current_states = np.array([transition[3] for transition in minibatch])/255
+        with self.graph.as_default():
+            # predict future Q values for all states in minibatch
+            future_qs_list = self.target_model.predict(new_current_states, batch_size=PREDICTION_BATCH_SIZE)
+
+        X = []
+        y = []
+
+        for index, (current_state, action, reward, new_state, done) in enumerate(minibatch):
+            if not done:
+                max_future_q = np.max(future_qs_list[index])
+                new_q = reward + DISCOUNT * max_future_q
+            else:
+                new_q = reward
+            
+            current_qs = current_qs_list[index]
+            current_qs[action] = new_q
+
+            X.append(current_state)
+            y.append(current_qs)
+            
+        log_this_step = False
+        if self.tensorboard.step > self.last_logged_episode:
+            log_this_step = True
+            self.last_logged_episode = self.tensorboard.step
+
+        with self.graph.as_default():
+            self.model.fit(np.array(X)/255, np.array(y), batch_size=TRAINING_BATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if log_this_step else None)
+
+        if log_this_step:
+            self.target_update_counter += 1
+
+        if self.target_update_counter > UPDATE_TARGET_EVERY:
             self.target_model.set_weights(self.model.get_weights())
-
-            self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
-
-            self.tensorboard = ModifiedTensorBoard(log_dir=f"logs/{MODEL_NAME}-{int(time.time())}") # by @sentdex, minimises unnecessary updates and exports, imporving performance
             self.target_update_counter = 0
-            self.graph = tf.get_default.graph()
-
-            self.terminate = False
-            self.last_logged_episode = 0
-            self.training_initialised = False
-
-        def create_model(self):
-            # model can be built here manually
-            '''
-            model = tf.Sequential()
-            model.add()
-            '''
-            base_model = Xception(weights=None, include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH,3) )
-
-            x = base_model.output
-            x = GlobalAveragePooling2D()(x)
-
-            predictions = Dense(3, activation="linear")(x)
-            model = Model(inputs=base_model.input, outputs=predictions)
-            model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
-            return model
-
-        def update_replay_memory(self, transition):
-            # transition = (current_state, action, reward, new_state, done)
-            self.replay_memory.append(transition)
-
-        def train(self):
-            if len(self.replay_memory) < MIN_REPLAY_SIZE:
-                return
-
-            minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
-
-            current_states = np.array([transition[0] for transition in minibatch])/255
-            with self.graph.as_default():
-                # predict current Q values for all states in minibatch
-                current_qs_list = self.model.predict(current_states, batch_size=PREDICTION_BATCH_SIZE)
-
-            new_current_states = np.array([transition[3] for transition in minibatch])/255
-            with self.graph.as_default():
-                # predict future Q values for all states in minibatch
-                future_qs_list = self.target_model.predict(new_current_states, batch_size=PREDICTION_BATCH_SIZE)
-
-            X = []
-            y = []
-
-            for index, (current_state, action, reward, new_state, done) in enumerate(minibatch):
-                if not done:
-                    max_future_q = np.max(future_qs_list[index])
-                    new_q = reward + DISCOUNT * max_future_q
-                else:
-                    new_q = reward
-                
-                current_qs = current_qs_list[index]
-                current_qs[action] = new_q
-
-                X.append(current_state)
-                y.append(current_qs)
-                
-            log_this_step = False
-            if self.tensorboard.step > self.last_logged_episode:
-                log_this_step = True
-                self.last_logged_episode = self.tensorboard.step
-
-            with self.graph.as_default():
-                self.model.fit(np.array(X)/255, np.array(y), batch_size=TRAINING_BATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if log_this_step else None)
-
-            if log_this_step:
-                self.target_update_counter += 1
-
-            if self.target_update_counter > UPDATE_TARGET_EVERY:
-                self.target_model.set_weights(self.model.get_weights())
-                self.target_update_counter = 0
+    
+    def get_qs(self, state):
+        return self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
         
-        def get_qs(self, state):
-            return self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
-            
-        def train_in_loop(self):
-            # first train is always slow, so simulate dummy train
-            X = np.random.uniform(size=(1, IMG_HEIGHT, IMG_WIDTH, 3)).astype(np.float32)
-            y = np.random.uniform(size=(1, 3)).astype(np.float32)
-            with self.graph.as_default():
-                self.model.fit(X, y, batch_size=1, verbose=0)
-            
-            self.training_initialised = True
+    def train_in_loop(self):
+        # first train is always slow, so simulate dummy train
+        X = np.random.uniform(size=(1, IMG_HEIGHT, IMG_WIDTH, 3)).astype(np.float32)
+        y = np.random.uniform(size=(1, 3)).astype(np.float32)
+        with self.graph.as_default():
+            self.model.fit(X, y, batch_size=1, verbose=0)
+        
+        self.training_initialised = True
 
-            while True:
-                if self.terminate:
-                    return
-                self.train()
-                time.sleep(0.01)
+        while True:
+            if self.terminate:
+                return
+            self.train()
+            time.sleep(0.01)
+
+if __name__ == "__main__":
+    FPS = 60 # MODIFY THIS TO CHANGE FPS
+    ep_rewards = [-200]
+
+    # set equal for repeatable results
+    random.seed(1)
+    np.random.seed(1)
+    tf.set_random_seed(1)
+
+    # required for multiple agents
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
+    backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
+
+    if not os.path.exists("models"):
+        os.makedirs("models")
+
+    agent = DQNAgent()
+    env = CarEnvironment()
+
+    trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
+    trainer_thread.start()
+
+    while not agent.training_initialised:
+        time.sleep(0.01)
+
+    agent.get_qs(np.ones((env.image_height, env.image_width, 3)))
+
+    for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit="episodes"):
+        env.collision_list = []
+        agent.tensorboard.step = episode
+        episode_reward = 0
+        step = 1
+        current_state = env.reset()
+        done = False
+        episode_start = time.time()
+
+        while True:
+            if np.random.random() < epsilon:
+                action = np.argmax(agent.get_qs(current_state))
+            else:
+                action = np.random.randint(0, 3)
+                time.sleep(1/FPS)
+
+            new_state, reward, done, _ = env.step(action)
+            episode_reward += reward
+            agent.update_replay_memory((current_state, action, reward, new_state, done))
+
+            step += 1
+
+            if done:
+                break
+
+        for action in env.actor_list:
+            action.destroy()
+
+        # Append episode reward to a list and log stats (every given number of episodes)
+        ep_rewards.append(episode_reward)
+        if not episode % AGGREGATE_STATS_EVERY or episode == 1:
+            average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
+            min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
+            max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
+            agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+
+            # Save model, but only when min reward is greater or equal a set value
+            if min_reward >= MIN_REWARD:
+                agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+
+        # Decay epsilon
+        if epsilon > MIN_EPSILON:
+            epsilon *= EPSILON_DECAY
+            epsilon = max(MIN_EPSILON, epsilon)
+
+            # Set termination flag for training thread and wait for it to finish
+        agent.terminate = True
+        trainer_thread.join()
+        agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+
