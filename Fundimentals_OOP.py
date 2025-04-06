@@ -134,7 +134,14 @@ class CarEnvironment:
     # RL functions
     def __init__(self):
         self.client = carla.Client("localhost", 2000)
-        self.world = self.client.get_world()
+        # self.world = self.client.get_world
+        self.world = self.client.load_world('Town04_OPT', carla.MapLayer.Buildings|carla.MapLayer.ParkedVehicles)
+
+        self.world.set_weather(carla.WeatherParameters.ClearNoon)
+
+        self.world.unload_map_layer(carla.MapLayer.Buildings)
+        self.world.unload_map_layer(carla.MapLayer.ParkedVehicles)
+
         self.bp_lib = self.world.get_blueprint_library()
         self.vehicle_bp = self.bp_lib.find('vehicle.nissan.micra')
 
@@ -203,7 +210,7 @@ class CarEnvironment:
         if len(self.collision_list) != 0:
             # end sim and punish for crashing
             done = True
-            reward = -200
+            reward = -2
 
         elif speed_kmh < 50:
             # slight punishment for slow speeds
@@ -401,5 +408,9 @@ if __name__ == "__main__":
             # Set termination flag for training thread and wait for it to finish
         agent.terminate = True
         trainer_thread.join()
-        agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
 
+        if episode % 25 == 0:
+            agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+
+        # view models by running "tensorboard --logdir=logs" in the command line
+        
