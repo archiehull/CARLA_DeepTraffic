@@ -130,24 +130,103 @@ class CarEnvironment:
         self.front_camera = i3
         # return i4
 
-    def populate_autopilot_cars(self, num_cars=10):
-        # TODO: find nearby spawnpoints
+    def generate_lane_waypoints(self, num_waypoints=200, separation=2.0):
+        # Get the current waypoint of the vehicle
+        # Get the spawn point at index 312
         spawn_points = self.world.get_map().get_spawn_points()
-        random.shuffle(spawn_points)  # Shuffle spawn points to avoid overlap
+        current_transform = spawn_points[312]
+        current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
 
-        for i in range(min(num_cars, len(spawn_points))):
+        # Initialize dictionaries to store waypoints for each lane
+        waypoints = {
+            "lane2": [],  # Current lane
+            "lane1": [],  # Left lane
+            "lane3": [],  # Right lane
+            "lane4": []   # Second right lane
+        }
+
+        # Generate waypoints for lane2 (current lane)
+        waypoint = current_waypoint
+        for _ in range(num_waypoints):
+            waypoints["lane2"].append(waypoint)
+            next_waypoints = waypoint.next(separation)
+            if next_waypoints:
+                waypoint = next_waypoints[0]
+            else:
+                break
+
+        # Generate waypoints for lane1 (left lane)
+        left_lane = current_waypoint.get_left_lane()
+        if left_lane:
+            waypoint = left_lane
+            for _ in range(num_waypoints):
+                waypoints["lane1"].append(waypoint)
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                else:
+                    break
+
+        # Generate waypoints for lane3 (right lane)
+        right_lane = current_waypoint.get_right_lane()
+        if right_lane:
+            waypoint = right_lane
+            for _ in range(num_waypoints):
+                waypoints["lane3"].append(waypoint)
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                else:
+                    break
+
+        # Generate waypoints for lane4 (second right lane)
+        if right_lane:
+            second_right_lane = right_lane.get_right_lane()
+            if second_right_lane:
+                waypoint = second_right_lane
+                for _ in range(num_waypoints):
+                    waypoints["lane4"].append(waypoint)
+                    next_waypoints = waypoint.next(separation)
+                    if next_waypoints:
+                        waypoint = next_waypoints[0]
+                    else:
+                        break
+
+        return waypoints
+
+
+
+    def populate_autopilot_cars(self, waypoints, num_cars=10):
+ 
+        # Combine all waypoints from all lanes into a single list
+        all_waypoints = waypoints["lane1"] + waypoints["lane2"] + waypoints["lane3"] + waypoints["lane4"]
+
+        # Shuffle the waypoints to randomize spawn locations
+        random.shuffle(all_waypoints)
+
+        # Spawn cars at random waypoints
+        for i in range(min(num_cars, len(all_waypoints))):
+            # Choose a random waypoint
+            spawn_waypoint = all_waypoints[i]
+
+            # Define the spawn transform for the vehicle
+            spawn_transform = spawn_waypoint.transform
+
             # Choose a random vehicle blueprint
             vehicle_bp = random.choice(self.bp_lib.filter('vehicle.toyota.prius'))
-            spawn_point = spawn_points[i]
 
-            # Spawn the vehicle
-            vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+            # Try to spawn the vehicle
+            vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
             if vehicle:
                 # Enable autopilot
                 vehicle.set_autopilot(True)
 
                 # Add the vehicle to the actor list for cleanup later
                 self.actor_list.append(vehicle)
+                print(f"Autopilot car spawned at {spawn_transform.location}.")
+            else:
+                print(f"Failed to spawn autopilot car at {spawn_transform.location}.")
+            
 
     # RL functions
     def __init__(self):
@@ -385,16 +464,16 @@ class CarEnvironment:
 
         if action == 3:  # Change to the left lane
             # TODO, write lane change script instead of spawning
-            env.change_lane("left")
-            # next_waypoint = current_waypoint.get_left_lane()
-            # if next_waypoint:
-            #     self.vehicle.set_transform(next_waypoint.transform)
+            #env.change_lane("left")
+             next_waypoint = current_waypoint.get_left_lane()
+             if next_waypoint:
+                 self.vehicle.set_transform(next_waypoint.transform)
 
         elif action == 4:  # Change to the right lane
-            env.change_lane("right")
-            # next_waypoint = current_waypoint.get_right_lane()
-            # if next_waypoint:
-            #     self.vehicle.set_transform(next_waypoint.transform)
+            #env.change_lane("right")
+             next_waypoint = current_waypoint.get_right_lane()
+             if next_waypoint:
+                 self.vehicle.set_transform(next_waypoint.transform)
 
         elif action == 0:  # Speed up
             self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
@@ -602,7 +681,10 @@ if __name__ == "__main__":
 
     agent = DQNAgent()
     env = CarEnvironment()
-    # env.populate_autopilot_cars(num_cars=100) # populate with 100 cars (high numbers may peak CPU usage)
+    waypoints = env.generate_lane_waypoints(num_waypoints=200, separation=2.0)
+
+    #TODO: fix me
+    # env.populate_autopilot_cars(waypoints, num_cars=20) # populate with 100 cars (high numbers may peak CPU usage)
 
     trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
     trainer_thread.start()
