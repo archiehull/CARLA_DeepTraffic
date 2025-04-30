@@ -60,7 +60,7 @@ MODEL_NAME = "Xception" ## TODO: INVESTIGATE MODELS
 MEMORY_FRACTION = 0.8 # allocates 80% of processing power to avoid overconsuption (test)
 MIN_REWARD = -200
 
-EPISODES = 100
+EPISODES = 10000
 
 DISCOUNT = 0.99
 epsilon = 1
@@ -205,17 +205,27 @@ class CarEnvironment:
         velocity = self.vehicle.get_velocity()
         speed_kmh = int(3.6 * math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2))
 
+        '''
+        # Check if the car is in the correct lane
+        vehicle_location = self.vehicle.get_location()
+        waypoint = self.world.get_map().get_waypoint(vehicle_location, project_to_road=True, lane_type=carla.LaneType.Driving)
 
+        if waypoint.lane_id != 0:  # Assuming lane_id 0 is the correct lane
+            # Punish for being in the wrong lane
+            reward = -5
+            done = False
+        '''
+            
         ## EXPERMIENT WITH DIFFERENT REWARD VALS
         if len(self.collision_list) != 0:
             # end sim and punish for crashing
             done = True
-            reward = -2
+            reward = -3
 
         elif speed_kmh < 50:
             # slight punishment for slow speeds
             done = False
-            reward = -1
+            reward = -2
         
         else:
             # slight reward for good speed
@@ -334,7 +344,7 @@ class DQNAgent:
             time.sleep(0.01)
 
 if __name__ == "__main__":
-    FPS = 60 # MODIFY THIS TO CHANGE FPS
+    FPS = 30 # MODIFY THIS TO CHANGE FPS
     ep_rewards = [-200]
 
     # set equal for repeatable results
@@ -409,7 +419,7 @@ if __name__ == "__main__":
         agent.terminate = True
         trainer_thread.join()
 
-        if episode % 25 == 0:
+        if episode % 1000 == 0:
             agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
 
         # view models by running "tensorboard --logdir=logs" in the command line

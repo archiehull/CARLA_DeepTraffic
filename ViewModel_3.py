@@ -5,15 +5,23 @@ import cv2
 import time
 import tensorflow as tf
 import h5py
+import argparse
+
 
 import keras.backend.tensorflow_backend as backend
 from keras.models import load_model
-from Fundimentals_OOP import CarEnvironment, MEMORY_FRACTION
+from CarlaClient_3 import CarEnvironment, MEMORY_FRACTION
 
 
-MODEL_PATH = 'models/Xception___-61.00max_-164.50avg_-341.00min__1743521376.model'
+MODEL_PATH = 'C:\Temp\old_models\models\Xception___-29.00max_-114.50avg_-200.00min__1743198607.model'
 
 if __name__ == '__main__':
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run the CARLA DeepTraffic agent.")
+    parser.add_argument('--model_path', type=str, required=False, default=MODEL_PATH, help="Path to the trained model file.")
+    args = parser.parse_args()
+
+    MODEL_PATH = args.model_path
 
     # Memory fraction
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION)
@@ -30,7 +38,7 @@ if __name__ == '__main__':
 
     # Initialize predictions - first prediction takes longer as of initialization that has to be done
     # It's better to do a first prediction then before we start iterating over episode steps
-    model.predict(np.ones((1, env.im_height, env.im_width, 3)))
+    model.predict(np.ones((1, env.image_height, env.image_width, 3)))
 
     # Loop over episodes
     while True:

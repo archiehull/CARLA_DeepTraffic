@@ -131,6 +131,7 @@ class CarEnvironment:
         # return i4
 
     def populate_autopilot_cars(self, num_cars=10):
+        # TODO: find nearby spawnpoints
         spawn_points = self.world.get_map().get_spawn_points()
         random.shuffle(spawn_points)  # Shuffle spawn points to avoid overlap
 
@@ -163,15 +164,80 @@ class CarEnvironment:
         self.bp_lib = self.world.get_blueprint_library()
         self.vehicle_bp = self.bp_lib.find('vehicle.nissan.micra')
 
+        self.fixed_location = carla.Location(x=9.497402, y=214.450912, z=0.281942) #spawn 312
+
+        self.set_spectator()
+
+
+    def set_spectator(self):
+        # Define the fixed location
+        fixed_location = self.fixed_location
+
+        # Calculate the spectator's position behind and above the fixed location
+        offset_distance = 50.0  # Distance behind the fixed location
+        offset_height = 50.0    # Height above the fixed location
+        forward_vector = carla.Vector3D(0, -1, 0)  # Assume a forward vector pointing along the x-axis
+
+        spectator_location = carla.Location(
+            x=fixed_location.x - offset_distance * forward_vector.x,
+            y=fixed_location.y - offset_distance * forward_vector.y,
+            z=fixed_location.z + offset_height
+        )
+        spectator_rotation = carla.Rotation(
+            pitch=-30,  # Slightly tilted down
+            yaw=-90,  
+            roll=0
+        )
+
+        # Get the spectator and set its transform
+        spectator = self.world.get_spectator()
+        spectator.set_transform(carla.Transform(spectator_location, spectator_rotation))
+        #print("Spectator position updated based on fixed location.")
+
+
+    def spawn_vehicle_ahead(self, spawn_point):
+       # print(f"Spawning vehicle at {spawn_point.location}")
+
+        # Define the spawn transform for the new vehicle
+        spawn_transform = carla.Transform(
+            location=spawn_point.location,
+            rotation=spawn_point.rotation
+        )
+
+        # Find a vehicle blueprint
+        vehicle_bp = self.bp_lib.find('vehicle.toyota.prius')  # Replace with desired object for demo
+
+        # Try to spawn the vehicle
+        new_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
+        if new_vehicle:
+           # print(f"Vehicle spawned successfully")
+            self.actor_list.append(new_vehicle)  # Add to the actor list for cleanup
+            return new_vehicle
+        else:
+            #print("Failed to spawn vehicle")
+            return None
+
+
+
+
+
+
     def reset(self):
         # reset lists
         self.collision_list = []
         self.actor_list = []
 
         # spawn agent
-        self.transform = random.choice(self.world.get_map().get_spawn_points())
+        spawn_points = self.world.get_map().get_spawn_points()
+
+        #self.transform = random.choice(spawn_points) # random location
+        self.transform = spawn_points[312] # start of highway
+
+
         self.vehicle = self.world.spawn_actor(self.vehicle_bp, self.transform)
         self.actor_list.append(self.vehicle)
+
+        self.spawn_vehicle_ahead(spawn_points[296]) # spawn vehicle ahead
 
         # initalise rgb camera
         self.camera_bp = self.bp_lib.find('sensor.camera.rgb')
@@ -211,6 +277,104 @@ class CarEnvironment:
         self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
 
         return self.front_camera
+    
+
+    def change_lane(self, direction, max_duration=5.0, steer_sensitivity=0.05):
+        """
+        Changes the lane of the vehicle to the left or right using waypoints and ensures it drives straight afterward.
+
+        Args:
+            direction (str): "left" or "right" to indicate the lane change direction.
+            max_duration (float): Maximum time in seconds to attempt the lane change.
+            steer_sensitivity (float): Sensitivity of the steering adjustment.
+        """
+        if direction not in ["left", "right"]:
+            print("Invalid direction. Use 'left' or 'right'.")
+            return
+
+        # Get the current waypoint
+        current_transform = self.vehicle.get_transform()
+        current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
+
+        # Get the target waypoint in the adjacent lane
+        if direction == "left":
+            target_waypoint = current_waypoint.get_left_lane()
+        elif direction == "right":
+            target_waypoint = current_waypoint.get_right_lane()
+
+        if not target_waypoint:
+            print(f"No {direction} lane available.")
+            return
+
+        # Start lane change
+        start_time = time.time()
+        while time.time() - start_time < max_duration:
+            # Get the vehicle's current position
+            current_transform = self.vehicle.get_transform()
+            current_location = current_transform.location
+
+            # Calculate the distance to the target waypoint
+            target_location = target_waypoint.transform.location
+            distance = current_location.distance(target_location)
+
+            # Calculate the angle to the target waypoint
+            forward_vector = current_transform.get_forward_vector()
+            direction_vector = carla.Vector3D(
+                target_location.x - current_location.x,
+                target_location.y - current_location.y,
+                0
+            )
+            dot_product = (forward_vector.x * direction_vector.x +
+                           forward_vector.y * direction_vector.y)
+            magnitude_product = (math.sqrt(forward_vector.x**2 + forward_vector.y**2) *
+                                 math.sqrt(direction_vector.x**2 + direction_vector.y**2))
+            angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
+
+            # Adjust steering based on the angle
+            steer = steer_sensitivity * angle if direction == "right" else -steer_sensitivity * angle
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=steer))
+
+            # Check if the vehicle is close enough to the target waypoint
+            if distance < 1.0:  # Threshold for lane alignment
+                print(f"Lane change to the {direction} completed.")
+                break
+
+            time.sleep(0.05)  # Small delay for smooth control
+
+        # Ensure the vehicle is driving straight
+        self.ensure_straight_driving(target_waypoint)
+
+    def ensure_straight_driving(self, waypoint):
+        """
+        Ensures the vehicle is driving straight by aligning it with the road's direction.
+
+        Args:
+            waypoint (carla.Waypoint): The waypoint in the current lane to align with.
+        """
+        while True:
+            # Get the vehicle's current transform
+            current_transform = self.vehicle.get_transform()
+
+            # Calculate the angle between the vehicle's forward vector and the waypoint's forward vector
+            vehicle_forward = current_transform.get_forward_vector()
+            waypoint_forward = waypoint.transform.get_forward_vector()
+
+            dot_product = (vehicle_forward.x * waypoint_forward.x +
+                           vehicle_forward.y * waypoint_forward.y)
+            magnitude_product = (math.sqrt(vehicle_forward.x**2 + vehicle_forward.y**2) *
+                                 math.sqrt(waypoint_forward.x**2 + waypoint_forward.y**2))
+            angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
+
+            # If the angle is small (close to 0), the vehicle is driving straight
+            if abs(angle) < 0.05:  # Adjust threshold as needed
+                print("Vehicle is driving straight.")
+                break
+
+            # Apply small steering corrections to align the vehicle
+            correction = -0.1 if angle > 0 else 0.1
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=correction))
+            time.sleep(0.05)
+
 
     def step(self, action): 
         current_transform = self.vehicle.get_transform()
@@ -219,23 +383,26 @@ class CarEnvironment:
 
         # action_define action_num
 
-        if action == 0:  # Change to the left lane
-            next_waypoint = current_waypoint.get_left_lane()
-            if next_waypoint:
-                self.vehicle.set_transform(next_waypoint.transform)
+        if action == 3:  # Change to the left lane
+            # TODO, write lane change script instead of spawning
+            env.change_lane("left")
+            # next_waypoint = current_waypoint.get_left_lane()
+            # if next_waypoint:
+            #     self.vehicle.set_transform(next_waypoint.transform)
 
-        elif action == 1:  # Change to the right lane
-            next_waypoint = current_waypoint.get_right_lane()
-            if next_waypoint:
-                self.vehicle.set_transform(next_waypoint.transform)
+        elif action == 4:  # Change to the right lane
+            env.change_lane("right")
+            # next_waypoint = current_waypoint.get_right_lane()
+            # if next_waypoint:
+            #     self.vehicle.set_transform(next_waypoint.transform)
 
-        elif action == 2:  # Speed up
+        elif action == 0:  # Speed up
             self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
 
-        elif action == 3:  # Slow down
+        elif action == 2:  # Slow down
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, brake=0.5))
 
-        elif action == 4:  # Stay the same
+        elif action == 1:  # Stay the same
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
 
         velocity = self.vehicle.get_velocity()
@@ -244,10 +411,10 @@ class CarEnvironment:
         # Reward logic
         if len(self.collision_list) != 0:
             done = True
-            reward = -2  # Penalty for collision
+            reward = -3  # Penalty for collision
         elif speed_kmh < 50:
             done = False
-            reward = -1  # Penalty for slow speed
+            reward = -2  # Penalty for slow speed
         else:
             done = False
             reward = 1  # Reward for maintaining good speed
@@ -289,6 +456,9 @@ class DQNAgent:
         return model
     
     # def create_model_64(self):  # 3 x 64
+
+    # TODO: FIX THIS MODEL AND WRITE NEW
+
     #     inputs = tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3))  # Define the input layer
 
     #     # Add convolutional and pooling layers

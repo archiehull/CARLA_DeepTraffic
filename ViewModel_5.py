@@ -4,16 +4,23 @@ import numpy as np
 import cv2
 import time
 import tensorflow as tf
+import argparse
 
 import keras.backend.tensorflow_backend as backend
 from keras.models import load_model
-from Fundimentals_OOP import CarEnvironment, MEMORY_FRACTION
+from CarlaClient_5 import CarEnvironment, MEMORY_FRACTION
 
 
 
 MODEL_PATH = 'C:\\Temp\\models\\Xception___-27.00max_-113.50avg_-200.00min__1745582883.model'
 
 if __name__ == '__main__':
+     # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run the CARLA DeepTraffic agent.")
+    parser.add_argument('--model_path', type=str, required=False, default=MODEL_PATH, help="Path to the trained model file.")
+    args = parser.parse_args()
+
+    MODEL_PATH = args.model_path
 
     # Memory fraction
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION)
