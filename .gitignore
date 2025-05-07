@@ -1,2 +1,4 @@
 
 *.model
+/logs/Xception-1746633343
+.vscode/launch.json

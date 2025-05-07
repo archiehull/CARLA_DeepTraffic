@@ -1,4 +1,4 @@
-# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0, Keras 2.2.4, h5py 2.10.0, CARLA 0.9.13
+# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0, Keras 2.2.4, h5py 2.10.0, CARLA 0.9.13, Numpy 1.16.4, OpenCV 4.5.3
 
 from platform import python_version
 
@@ -21,26 +21,37 @@ except ImportError:
     input("\nPress Enter to exit")
     exit()
 
+import os
+import warnings
+from contextlib import redirect_stdout
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+import tensorflow as tf
+# Use TensorFlow's compatibility mode for deprecated APIs
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+
+
 import math
 import random
 import time
 import numpy as np
 import cv2
 from collections import deque
-import tensorflow as tf
+
 from keras.applications.xception import Xception 
 from keras.layers import Dense, GlobalAveragePooling2D
 from keras.optimizers import Adam
 from keras.models import Model
 from keras.callbacks import TensorBoard
-import os
-from threading import Thread
-
 import keras.backend.tensorflow_backend as backend   # Must use older version of Tensorflow
 
-from tqdm import tqdm
+from threading import Thread
 
+from tqdm import tqdm
 # CONSTANTS
+
+print("\nPreparing Client...\n")
 
 # Image parameters
 SHOW_PREVIEW = False
@@ -66,6 +77,10 @@ DISCOUNT = 0.99
 epsilon = 1
 EPSILON_DECAY = 0.99 ## tend towards 1.0 depeninding on # of steps
 MIN_EPSILON = 0.001
+
+CARS_ON_HIGHWAY = 20 # number of cars on highway
+WAYPOINTS_PER_LANE = 16 # number of waypoints on highway
+WAYPOINT_SEPARATION = 10.0 # distance between waypoints
 
 AGGREGATE_STATS_EVERY = 10
 
@@ -108,6 +123,7 @@ class CarEnvironment:
     image_width = IMG_WIDTH
     image_height = IMG_HEIGHT
     actor_list = []
+    auto_list = []
 
     front_camera = None
     collision_list = []
@@ -130,9 +146,8 @@ class CarEnvironment:
         self.front_camera = i3
         # return i4
 
-    def generate_lane_waypoints(self, num_waypoints=200, separation=2.0):
+    def generate_lane_waypoints_50_50(self, num_waypoints=WAYPOINTS_PER_LANE, separation=WAYPOINT_SEPARATION):
         # Get the current waypoint of the vehicle
-        # Get the spawn point at index 312
         spawn_points = self.world.get_map().get_spawn_points()
         current_transform = spawn_points[312]
         current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
@@ -147,11 +162,20 @@ class CarEnvironment:
 
         # Generate waypoints for lane2 (current lane)
         waypoint = current_waypoint
-        for _ in range(num_waypoints):
-            waypoints["lane2"].append(waypoint)
+        for _ in range(num_waypoints // 2):  # Generate waypoints behind
+            previous_waypoints = waypoint.previous(separation)
+            if previous_waypoints:
+                waypoint = previous_waypoints[0]
+                waypoints["lane2"].insert(0, waypoint)  # Insert at the beginning
+            else:
+                break
+
+        waypoint = current_waypoint
+        for _ in range(num_waypoints // 2):  # Generate waypoints in front
             next_waypoints = waypoint.next(separation)
             if next_waypoints:
                 waypoint = next_waypoints[0]
+                waypoints["lane2"].append(waypoint)
             else:
                 break
 
@@ -159,11 +183,20 @@ class CarEnvironment:
         left_lane = current_waypoint.get_left_lane()
         if left_lane:
             waypoint = left_lane
-            for _ in range(num_waypoints):
-                waypoints["lane1"].append(waypoint)
+            for _ in range(num_waypoints // 2):  # Generate waypoints behind
+                previous_waypoints = waypoint.previous(separation)
+                if previous_waypoints:
+                    waypoint = previous_waypoints[0]
+                    waypoints["lane1"].insert(0, waypoint)
+                else:
+                    break
+
+            waypoint = left_lane
+            for _ in range(num_waypoints // 2):  # Generate waypoints in front
                 next_waypoints = waypoint.next(separation)
                 if next_waypoints:
                     waypoint = next_waypoints[0]
+                    waypoints["lane1"].append(waypoint)
                 else:
                     break
 
@@ -171,11 +204,20 @@ class CarEnvironment:
         right_lane = current_waypoint.get_right_lane()
         if right_lane:
             waypoint = right_lane
-            for _ in range(num_waypoints):
-                waypoints["lane3"].append(waypoint)
+            for _ in range(num_waypoints // 2):  # Generate waypoints behind
+                previous_waypoints = waypoint.previous(separation)
+                if previous_waypoints:
+                    waypoint = previous_waypoints[0]
+                    waypoints["lane3"].insert(0, waypoint)
+                else:
+                    break
+
+            waypoint = right_lane
+            for _ in range(num_waypoints // 2):  # Generate waypoints in front
                 next_waypoints = waypoint.next(separation)
                 if next_waypoints:
                     waypoint = next_waypoints[0]
+                    waypoints["lane3"].append(waypoint)
                 else:
                     break
 
@@ -184,33 +226,193 @@ class CarEnvironment:
             second_right_lane = right_lane.get_right_lane()
             if second_right_lane:
                 waypoint = second_right_lane
-                for _ in range(num_waypoints):
-                    waypoints["lane4"].append(waypoint)
+                for _ in range(num_waypoints // 2):  # Generate waypoints behind
+                    previous_waypoints = waypoint.previous(separation)
+                    if previous_waypoints:
+                        waypoint = previous_waypoints[0]
+                        waypoints["lane4"].insert(0, waypoint)
+                    else:
+                        break
+
+                waypoint = second_right_lane
+                for _ in range(num_waypoints // 2):  # Generate waypoints in front
                     next_waypoints = waypoint.next(separation)
                     if next_waypoints:
                         waypoint = next_waypoints[0]
+                        waypoints["lane4"].append(waypoint)
+                    else:
+                        break
+
+        return waypoints
+    
+    def generate_lane_waypoints_25_75(self, num_waypoints=WAYPOINTS_PER_LANE, separation=WAYPOINT_SEPARATION):
+        # Get the current waypoint of the vehicle
+        spawn_points = self.world.get_map().get_spawn_points()
+        current_transform = spawn_points[312]
+        current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
+
+        # Initialize dictionaries to store waypoints for each lane
+        waypoints = {
+            "lane2": [],  # Current lane
+            "lane1": [],  # Left lane
+            "lane3": [],  # Right lane
+            "lane4": []   # Second right lane
+        }
+
+        # Generate waypoints for lane2 (current lane)
+        waypoint = current_waypoint
+        for _ in range(num_waypoints // 4):  # Generate 1/4 waypoints behind
+            previous_waypoints = waypoint.previous(separation)
+            if previous_waypoints:
+                waypoint = previous_waypoints[0]
+                waypoints["lane2"].insert(0, waypoint)  # Insert at the beginning
+            else:
+                break
+
+        waypoint = current_waypoint
+        for _ in range(3 * num_waypoints // 4):  # Generate 3/4 waypoints ahead
+            next_waypoints = waypoint.next(separation)
+            if next_waypoints:
+                waypoint = next_waypoints[0]
+                waypoints["lane2"].append(waypoint)
+            else:
+                break
+
+        # Generate waypoints for lane1 (left lane)
+        left_lane = current_waypoint.get_left_lane()
+        if left_lane:
+            waypoint = left_lane
+            for _ in range(num_waypoints // 4):  # Generate 1/4 waypoints behind
+                previous_waypoints = waypoint.previous(separation)
+                if previous_waypoints:
+                    waypoint = previous_waypoints[0]
+                    waypoints["lane1"].insert(0, waypoint)
+                else:
+                    break
+
+            waypoint = left_lane
+            for _ in range(3 * num_waypoints // 4):  # Generate 3/4 waypoints ahead
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                    waypoints["lane1"].append(waypoint)
+                else:
+                    break
+
+        # Generate waypoints for lane3 (right lane)
+        right_lane = current_waypoint.get_right_lane()
+        if right_lane:
+            waypoint = right_lane
+            for _ in range(num_waypoints // 4):  # Generate 1/4 waypoints behind
+                previous_waypoints = waypoint.previous(separation)
+                if previous_waypoints:
+                    waypoint = previous_waypoints[0]
+                    waypoints["lane3"].insert(0, waypoint)
+                else:
+                    break
+
+            waypoint = right_lane
+            for _ in range(3 * num_waypoints // 4):  # Generate 3/4 waypoints ahead
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                    waypoints["lane3"].append(waypoint)
+                else:
+                    break
+
+        # Generate waypoints for lane4 (second right lane)
+        if right_lane:
+            second_right_lane = right_lane.get_right_lane()
+            if second_right_lane:
+                waypoint = second_right_lane
+                for _ in range(num_waypoints // 4):  # Generate 1/4 waypoints behind
+                    previous_waypoints = waypoint.previous(separation)
+                    if previous_waypoints:
+                        waypoint = previous_waypoints[0]
+                        waypoints["lane4"].insert(0, waypoint)
+                    else:
+                        break
+
+                waypoint = second_right_lane
+                for _ in range(3 * num_waypoints // 4):  # Generate 3/4 waypoints ahead
+                    next_waypoints = waypoint.next(separation)
+                    if next_waypoints:
+                        waypoint = next_waypoints[0]
+                        waypoints["lane4"].append(waypoint)
                     else:
                         break
 
         return waypoints
 
+    def generate_lane_waypoints_0_100(self, num_waypoints=WAYPOINTS_PER_LANE, separation=WAYPOINT_SEPARATION):
+        spawn_points = self.world.get_map().get_spawn_points()
+        current_transform = spawn_points[312]
+        current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
 
+        waypoints = {
+            "lane2": [],
+            "lane1": [],
+            "lane3": [],
+            "lane4": []
+        }
 
-    def populate_autopilot_cars(self, waypoints, num_cars=10):
- 
-        # Combine all waypoints from all lanes into a single list
-        all_waypoints = waypoints["lane1"] + waypoints["lane2"] + waypoints["lane3"] + waypoints["lane4"]
+        waypoint = current_waypoint
+        for _ in range(num_waypoints):
+            next_waypoints = waypoint.next(separation)
+            if next_waypoints:
+                waypoint = next_waypoints[0]
+                waypoints["lane2"].append(waypoint)
+            else:
+                break
 
+        left_lane = current_waypoint.get_left_lane()
+        if left_lane:
+            waypoint = left_lane
+            for _ in range(num_waypoints):
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                    waypoints["lane1"].append(waypoint)
+                else:
+                    break
+
+        right_lane = current_waypoint.get_right_lane()
+        if right_lane:
+            waypoint = right_lane
+            for _ in range(num_waypoints):
+                next_waypoints = waypoint.next(separation)
+                if next_waypoints:
+                    waypoint = next_waypoints[0]
+                    waypoints["lane3"].append(waypoint)
+                else:
+                    break
+
+            second_right_lane = right_lane.get_right_lane()
+            if second_right_lane:
+                waypoint = second_right_lane
+                for _ in range(num_waypoints):
+                    next_waypoints = waypoint.next(separation)
+                    if next_waypoints:
+                        waypoint = next_waypoints[0]
+                        waypoints["lane4"].append(waypoint)
+                    else:
+                        break
+
+        return waypoints
+
+    def populate_autopilot_cars(self, all_waypoints, num_cars=10):
         # Shuffle the waypoints to randomize spawn locations
-        random.shuffle(all_waypoints)
+        selected_waypoints = [random.choice(row) for row in all_waypoints if row]
+        # print(len(all_waypoints), "waypoints available for spawning cars.")
 
         # Spawn cars at random waypoints
-        for i in range(min(num_cars, len(all_waypoints))):
+        for i in range(min(num_cars, len(selected_waypoints))):
             # Choose a random waypoint
-            spawn_waypoint = all_waypoints[i]
+            spawn_waypoint = selected_waypoints[i]
 
             # Define the spawn transform for the vehicle
             spawn_transform = spawn_waypoint.transform
+            spawn_transform.location.z += 1.0
 
             # Choose a random vehicle blueprint
             vehicle_bp = random.choice(self.bp_lib.filter('vehicle.toyota.prius'))
@@ -219,17 +421,118 @@ class CarEnvironment:
             vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
             if vehicle:
                 # Enable autopilot
-                vehicle.set_autopilot(True)
+                # vehicle.set_autopilot(True)
 
                 # Add the vehicle to the actor list for cleanup later
                 self.actor_list.append(vehicle)
-                print(f"Autopilot car spawned at {spawn_transform.location}.")
-            else:
-                print(f"Failed to spawn autopilot car at {spawn_transform.location}.")
-            
+                self.auto_list.append(vehicle)
+                # print(f"Autopilot car spawned at {spawn_transform.location}.")
+            # else:
+            #     print(f"Failed to spawn autopilot car at {spawn_transform.location}.")
+
+    def spawn_obstacles(self, all_waypoints, num_cars=10):
+        random.shuffle(all_waypoints)
+
+        for i in range(min(num_cars, len(all_waypoints))):
+            spawn_waypoint = all_waypoints[i]
+
+            spawn_transform = spawn_waypoint.transform
+            spawn_transform.location.z += 1.0
+
+            vehicle_bp = random.choice(self.bp_lib.filter('static.prop.vendingmachine'))  # Random vehicle
+
+            vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
+            if vehicle:
+                self.actor_list.append(vehicle)
+
+    '''
+        def change_lane(self, direction, max_duration=5.0, steer_sensitivity=0.05):
+
+            if direction not in ["left", "right"]:
+                print("Invalid direction. Use 'left' or 'right'.")
+                return
+
+            # Get the current waypoint
+            current_transform = self.vehicle.get_transform()
+            current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
+
+            # Get the target waypoint in the adjacent lane
+            if direction == "left":
+                target_waypoint = current_waypoint.get_left_lane()
+            elif direction == "right":
+                target_waypoint = current_waypoint.get_right_lane()
+
+            if not target_waypoint:
+                print(f"No {direction} lane available.")
+                return
+
+            # Start lane change
+            start_time = time.time()
+            while time.time() - start_time < max_duration:
+                # Get the vehicle's current position
+                current_transform = self.vehicle.get_transform()
+                current_location = current_transform.location
+
+                # Calculate the distance to the target waypoint
+                target_location = target_waypoint.transform.location
+                distance = current_location.distance(target_location)
+
+                # Calculate the angle to the target waypoint
+                forward_vector = current_transform.get_forward_vector()
+                direction_vector = carla.Vector3D(
+                    target_location.x - current_location.x,
+                    target_location.y - current_location.y,
+                    0
+                )
+                dot_product = (forward_vector.x * direction_vector.x +
+                            forward_vector.y * direction_vector.y)
+                magnitude_product = (math.sqrt(forward_vector.x**2 + forward_vector.y**2) *
+                                    math.sqrt(direction_vector.x**2 + direction_vector.y**2))
+                angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
+
+                # Adjust steering based on the angle
+                steer = steer_sensitivity * angle if direction == "right" else -steer_sensitivity * angle
+                self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=steer))
+
+                # Check if the vehicle is close enough to the target waypoint
+                if distance < 1.0:  # Threshold for lane alignment
+                    print(f"Lane change to the {direction} completed.")
+                    break
+
+                time.sleep(0.05)  # Small delay for smooth control
+
+            # Ensure the vehicle is driving straight
+            self.ensure_straight_driving(target_waypoint)
+
+        def ensure_straight_driving(self, waypoint):
+            while True:
+                # Get the vehicle's current transform
+                current_transform = self.vehicle.get_transform()
+
+                # Calculate the angle between the vehicle's forward vector and the waypoint's forward vector
+                vehicle_forward = current_transform.get_forward_vector()
+                waypoint_forward = waypoint.transform.get_forward_vector()
+
+                dot_product = (vehicle_forward.x * waypoint_forward.x +
+                            vehicle_forward.y * waypoint_forward.y)
+                magnitude_product = (math.sqrt(vehicle_forward.x**2 + vehicle_forward.y**2) *
+                                    math.sqrt(waypoint_forward.x**2 + waypoint_forward.y**2))
+                angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
+
+                # If the angle is small (close to 0), the vehicle is driving straight
+                if abs(angle) < 0.05:  # Adjust threshold as needed
+                    print("Vehicle is driving straight.")
+                    break
+
+                # Apply small steering corrections to align the vehicle
+                correction = -0.1 if angle > 0 else 0.1
+                self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=correction))
+                time.sleep(0.05)
+    '''
 
     # RL functions
     def __init__(self):
+        print("\nInitialising Environment...\n")
         self.client = carla.Client("localhost", 2000)
 
         # self.world = self.client.get_world()
@@ -245,7 +548,32 @@ class CarEnvironment:
 
         self.fixed_location = carla.Location(x=9.497402, y=214.450912, z=0.281942) #spawn 312
 
+        lane_waypoints = self.generate_lane_waypoints_0_100()
+
+        self.all_waypoints = []
+        for i in range(WAYPOINTS_PER_LANE):
+            batch = [
+                lane_waypoints["lane1"][i],
+                lane_waypoints["lane2"][i],
+                lane_waypoints["lane3"][i],
+                lane_waypoints["lane4"][i]
+            ]
+            self.all_waypoints.append(batch)
+        
+
+
         self.set_spectator()
+
+        # Warm up the Traffic Manager
+        vehicle_bp = self.bp_lib.find('vehicle.audi.tt')  # Use any vehicle blueprint
+        spawn_points = self.world.get_map().get_spawn_points()
+
+        # Spawn a temporary vehicle
+        temp_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_points[0])
+        if temp_vehicle:
+            temp_vehicle.set_autopilot(True)  # Enable autopilot
+            time.sleep(2)  # Allow time for the Traffic Manager to initialize
+            temp_vehicle.destroy()  # Destroy the temporary vehicle
 
 
     def set_spectator(self):
@@ -253,8 +581,8 @@ class CarEnvironment:
         fixed_location = self.fixed_location
 
         # Calculate the spectator's position behind and above the fixed location
-        offset_distance = 50.0  # Distance behind the fixed location
-        offset_height = 50.0    # Height above the fixed location
+        offset_distance = 15.0  # Distance behind the fixed location
+        offset_height = 25.0    # Height above the fixed location
         forward_vector = carla.Vector3D(0, -1, 0)  # Assume a forward vector pointing along the x-axis
 
         spectator_location = carla.Location(
@@ -297,14 +625,11 @@ class CarEnvironment:
             return None
 
 
-
-
-
-
     def reset(self):
         # reset lists
         self.collision_list = []
         self.actor_list = []
+        self.auto_list = []
 
         # spawn agent
         spawn_points = self.world.get_map().get_spawn_points()
@@ -316,7 +641,13 @@ class CarEnvironment:
         self.vehicle = self.world.spawn_actor(self.vehicle_bp, self.transform)
         self.actor_list.append(self.vehicle)
 
-        self.spawn_vehicle_ahead(spawn_points[296]) # spawn vehicle ahead
+        # self.spawn_obstacles(self.all_waypoints_infront, num_cars=10) # spawn obstacles 
+        self.populate_autopilot_cars(self.all_waypoints, num_cars=CARS_ON_HIGHWAY) # populate highway (high numbers may peak CPU usage)
+        
+        time.sleep(0.5) # wait for cars to spawn
+
+        for car in self.auto_list:
+            car.set_autopilot(True)
 
         # initalise rgb camera
         self.camera_bp = self.bp_lib.find('sensor.camera.rgb')
@@ -334,7 +665,7 @@ class CarEnvironment:
         self.camera.listen(lambda image: self.process_img(image))
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
+        self.vehicle.apply_control(carla.VehicleControl(throttle=15.0, brake=0.0))
         # avoid taking input during init
         time.sleep(4)
 
@@ -353,108 +684,10 @@ class CarEnvironment:
         self.episode_start = time.time()
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
+        self.vehicle.apply_control(carla.VehicleControl(throttle=20.0, brake=0.0))
 
         return self.front_camera
     
-
-    def change_lane(self, direction, max_duration=5.0, steer_sensitivity=0.05):
-        """
-        Changes the lane of the vehicle to the left or right using waypoints and ensures it drives straight afterward.
-
-        Args:
-            direction (str): "left" or "right" to indicate the lane change direction.
-            max_duration (float): Maximum time in seconds to attempt the lane change.
-            steer_sensitivity (float): Sensitivity of the steering adjustment.
-        """
-        if direction not in ["left", "right"]:
-            print("Invalid direction. Use 'left' or 'right'.")
-            return
-
-        # Get the current waypoint
-        current_transform = self.vehicle.get_transform()
-        current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
-
-        # Get the target waypoint in the adjacent lane
-        if direction == "left":
-            target_waypoint = current_waypoint.get_left_lane()
-        elif direction == "right":
-            target_waypoint = current_waypoint.get_right_lane()
-
-        if not target_waypoint:
-            print(f"No {direction} lane available.")
-            return
-
-        # Start lane change
-        start_time = time.time()
-        while time.time() - start_time < max_duration:
-            # Get the vehicle's current position
-            current_transform = self.vehicle.get_transform()
-            current_location = current_transform.location
-
-            # Calculate the distance to the target waypoint
-            target_location = target_waypoint.transform.location
-            distance = current_location.distance(target_location)
-
-            # Calculate the angle to the target waypoint
-            forward_vector = current_transform.get_forward_vector()
-            direction_vector = carla.Vector3D(
-                target_location.x - current_location.x,
-                target_location.y - current_location.y,
-                0
-            )
-            dot_product = (forward_vector.x * direction_vector.x +
-                           forward_vector.y * direction_vector.y)
-            magnitude_product = (math.sqrt(forward_vector.x**2 + forward_vector.y**2) *
-                                 math.sqrt(direction_vector.x**2 + direction_vector.y**2))
-            angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
-
-            # Adjust steering based on the angle
-            steer = steer_sensitivity * angle if direction == "right" else -steer_sensitivity * angle
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=steer))
-
-            # Check if the vehicle is close enough to the target waypoint
-            if distance < 1.0:  # Threshold for lane alignment
-                print(f"Lane change to the {direction} completed.")
-                break
-
-            time.sleep(0.05)  # Small delay for smooth control
-
-        # Ensure the vehicle is driving straight
-        self.ensure_straight_driving(target_waypoint)
-
-    def ensure_straight_driving(self, waypoint):
-        """
-        Ensures the vehicle is driving straight by aligning it with the road's direction.
-
-        Args:
-            waypoint (carla.Waypoint): The waypoint in the current lane to align with.
-        """
-        while True:
-            # Get the vehicle's current transform
-            current_transform = self.vehicle.get_transform()
-
-            # Calculate the angle between the vehicle's forward vector and the waypoint's forward vector
-            vehicle_forward = current_transform.get_forward_vector()
-            waypoint_forward = waypoint.transform.get_forward_vector()
-
-            dot_product = (vehicle_forward.x * waypoint_forward.x +
-                           vehicle_forward.y * waypoint_forward.y)
-            magnitude_product = (math.sqrt(vehicle_forward.x**2 + vehicle_forward.y**2) *
-                                 math.sqrt(waypoint_forward.x**2 + waypoint_forward.y**2))
-            angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
-
-            # If the angle is small (close to 0), the vehicle is driving straight
-            if abs(angle) < 0.05:  # Adjust threshold as needed
-                print("Vehicle is driving straight.")
-                break
-
-            # Apply small steering corrections to align the vehicle
-            correction = -0.1 if angle > 0 else 0.1
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=correction))
-            time.sleep(0.05)
-
-
     def step(self, action): 
         current_transform = self.vehicle.get_transform()
         current_location = current_transform.location
@@ -681,10 +914,6 @@ if __name__ == "__main__":
 
     agent = DQNAgent()
     env = CarEnvironment()
-    waypoints = env.generate_lane_waypoints(num_waypoints=200, separation=2.0)
-
-    #TODO: fix me
-    # env.populate_autopilot_cars(waypoints, num_cars=20) # populate with 100 cars (high numbers may peak CPU usage)
 
     trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
     trainer_thread.start()
@@ -719,9 +948,11 @@ if __name__ == "__main__":
 
             if done:
                 break
+        for car in env.auto_list:
+            car.set_autopilot(False) # must be false to destroy
 
-        for action in env.actor_list:
-            action.destroy()
+        for actor in env.actor_list:
+            actor.destroy()
 
         # Append episode reward to a list and log stats (every given number of episodes)
         ep_rewards.append(episode_reward)
