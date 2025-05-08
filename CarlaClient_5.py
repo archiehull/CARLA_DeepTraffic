@@ -1,4 +1,4 @@
-# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0, Keras 2.2.4, h5py 2.10.0, CARLA 0.9.13, Numpy 1.16.4, OpenCV 4.5.3
+# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0 (GPU version requires CUDA 10), Keras 2.2.4, h5py 2.10.0, CARLA 0.9.13, Numpy 1.16.4, OpenCV 4.5.3
 
 from platform import python_version
 
@@ -38,6 +38,7 @@ import time
 import numpy as np
 import cv2
 from collections import deque
+from tensorflow import keras
 
 from keras.applications.xception import Xception 
 from keras.layers import Dense, GlobalAveragePooling2D
@@ -66,25 +67,30 @@ MINIBATCH_SIZE = 16
 PREDICTION_BATCH_SIZE = 1
 TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
 UPDATE_TARGET_EVERY = 5
-MODEL_NAME = "Xception" ## TODO: INVESTIGATE MODELS
+
+# MODEL_NAME = "Xception"
+MODEL_NAME = "64x3CNN"
 
 MEMORY_FRACTION = 0.8 # allocates 80% of processing power to avoid overconsuption (test)
 MIN_REWARD = -200
 
-EPISODES = 10000
+EPISODES = 5000
 
 DISCOUNT = 0.99
 epsilon = 1
-EPSILON_DECAY = 0.99 ## tend towards 1.0 depeninding on # of steps
-MIN_EPSILON = 0.001
+EPSILON_DECAY = 0.999 ## tend towards 1.0 depeninding on # of steps
+MIN_EPSILON = 0.1
 
-CARS_ON_HIGHWAY = 20 # number of cars on highway
-WAYPOINTS_PER_LANE = 16 # number of waypoints on highway
+CARS_ON_HIGHWAY = 30 # number of cars on highway -20
+WAYPOINTS_PER_LANE = 25 # number of waypoints on highway -16
 WAYPOINT_SEPARATION = 10.0 # distance between waypoints
 
 AGGREGATE_STATS_EVERY = 10
 
 # Own Tensorboard class
+# run "tensorboard --logdir=logs/" in terminal to view tensorboard
+# http://localhost:6006/
+
 class ModifiedTensorBoard(TensorBoard):
 
     # Overriding init to set initial step and writer (we want one log file for all .fit() calls)
@@ -431,15 +437,17 @@ class CarEnvironment:
             #     print(f"Failed to spawn autopilot car at {spawn_transform.location}.")
 
     def spawn_obstacles(self, all_waypoints, num_cars=10):
-        random.shuffle(all_waypoints)
+        selected_waypoints = [random.choice(row) for row in all_waypoints if row]
 
-        for i in range(min(num_cars, len(all_waypoints))):
-            spawn_waypoint = all_waypoints[i]
+        for i in range(min(num_cars, len(selected_waypoints))):
+            spawn_waypoint = selected_waypoints[i]
 
             spawn_transform = spawn_waypoint.transform
             spawn_transform.location.z += 1.0
 
-            vehicle_bp = random.choice(self.bp_lib.filter('static.prop.vendingmachine'))  # Random vehicle
+            # vehicle_bp = random.choice(self.bp_lib.filter('static.prop.vendingmachine'))
+            vehicle_bp = random.choice(self.bp_lib.filter('vehicle.toyota.prius'))
+
 
             vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
             if vehicle:
@@ -550,6 +558,8 @@ class CarEnvironment:
 
         lane_waypoints = self.generate_lane_waypoints_0_100()
 
+
+
         self.all_waypoints = []
         for i in range(WAYPOINTS_PER_LANE):
             batch = [
@@ -613,6 +623,7 @@ class CarEnvironment:
 
         # Find a vehicle blueprint
         vehicle_bp = self.bp_lib.find('vehicle.toyota.prius')  # Replace with desired object for demo
+        # vehicle_bp = self.bp_lib.find('static.prop.vendingmachine')  # Replace with desired object for demo
 
         # Try to spawn the vehicle
         new_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
@@ -641,13 +652,16 @@ class CarEnvironment:
         self.vehicle = self.world.spawn_actor(self.vehicle_bp, self.transform)
         self.actor_list.append(self.vehicle)
 
-        # self.spawn_obstacles(self.all_waypoints_infront, num_cars=10) # spawn obstacles 
-        self.populate_autopilot_cars(self.all_waypoints, num_cars=CARS_ON_HIGHWAY) # populate highway (high numbers may peak CPU usage)
+        self.spawn_obstacles(self.all_waypoints, num_cars=10) # spawn obstacles 
+        # self.populate_autopilot_cars(self.all_waypoints, num_cars=CARS_ON_HIGHWAY) # populate highway (high numbers may peak CPU usage)
         
         time.sleep(0.5) # wait for cars to spawn
 
         for car in self.auto_list:
-            car.set_autopilot(True)
+            try:
+                car.set_autopilot(True)
+            except:
+                pass
 
         # initalise rgb camera
         self.camera_bp = self.bp_lib.find('sensor.camera.rgb')
@@ -665,7 +679,7 @@ class CarEnvironment:
         self.camera.listen(lambda image: self.process_img(image))
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=15.0, brake=0.0))
+        self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
         # avoid taking input during init
         time.sleep(4)
 
@@ -684,7 +698,7 @@ class CarEnvironment:
         self.episode_start = time.time()
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=20.0, brake=0.0))
+        self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
 
         return self.front_camera
     
@@ -692,7 +706,7 @@ class CarEnvironment:
         current_transform = self.vehicle.get_transform()
         current_location = current_transform.location
         current_waypoint = self.world.get_map().get_waypoint(current_location)
-
+        next_waypoint = None
         # action_define action_num
 
         if action == 3:  # Change to the left lane
@@ -723,10 +737,13 @@ class CarEnvironment:
         # Reward logic
         if len(self.collision_list) != 0:
             done = True
-            reward = -3  # Penalty for collision
+            reward = -1  # Penalty for collision
+        elif next_waypoint == -5 or next_waypoint == 1: # Check if the vehicle is off the road
+            done = True
+            reward = -1
         elif speed_kmh < 50:
             done = False
-            reward = -2  # Penalty for slow speed
+            reward = -0.5  # Penalty for slow speed
         else:
             done = False
             reward = 1  # Reward for maintaining good speed
@@ -740,8 +757,13 @@ class CarEnvironment:
 
 class DQNAgent:
     def __init__(self):
-        self.model = self.create_model_x() # create model
-        self.target_model = self.create_model_x() # create target model
+        self.model = self.create_model_64() # create model
+        self.target_model = self.create_model_64() # create target model
+
+        # Build models by running a dummy forward pass
+        # dummy_input = np.random.rand(1, IMG_HEIGHT, IMG_WIDTH, 3).astype(np.float32)
+        # self.model.predict(dummy_input)
+        # self.target_model.predict(dummy_input)
 
         self.target_model.set_weights(self.model.get_weights())
 
@@ -759,42 +781,68 @@ class DQNAgent:
     def create_model_x(self): # Xception model
         base_model = Xception(weights=None, include_top=False, input_shape=(IMG_HEIGHT, IMG_WIDTH,3) )
 
+        # MODEL_NAME = "Xception"
+
         x = base_model.output
         x = GlobalAveragePooling2D()(x)
 
         predictions = Dense(5, activation="linear")(x) # Output layer == action_num
         model = Model(inputs=base_model.input, outputs=predictions)
-        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
+        model.compile(loss="mse", optimizer=Adam(lr=0.0001), metrics=["accuracy"])
         return model
     
-    # def create_model_64(self):  # 3 x 64
+    def create_model_64_x(self):  # 3 x 64
 
     # TODO: FIX THIS MODEL AND WRITE NEW
 
-    #     inputs = tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3))  # Define the input layer
+        inputs = tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3))  # Define the input layer
 
-    #     # Add convolutional and pooling layers
-    #     x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(inputs)
-    #     x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
+        # Add convolutional and pooling layers
+        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(inputs)
+        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
 
-    #     x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
-    #     x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
+        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
+        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
 
-    #     x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
-    #     x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
+        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
+        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
 
-    #     # Flatten the output and add dense layers
-    #     x = tf.keras.layers.Flatten()(x)
-    #     x = tf.keras.layers.Dense(512, activation='relu')(x)
-    #     outputs = tf.keras.layers.Dense(3, activation='linear')(x)  # Output layer
+        # Flatten the output and add dense layers
+        x = tf.keras.layers.Flatten()(x)
+        x = tf.keras.layers.Dense(512, activation='relu')(x)
+        outputs = tf.keras.layers.Dense(5, activation='linear')(x)  # Output layer action_num
 
-    #     # Create the model
-    #     model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        # Create the model
+        model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
-    #     # Compile the model
-    #     model.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(lr=0.001), metrics=["accuracy"])
+        # Compile the model
+        model.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(lr=0.001), metrics=["accuracy"])
 
-    #     return model
+        return model
+
+    def create_model_64(self):
+        # MODEL_NAME = "64x3CNN"
+
+        model = keras.Sequential([
+            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
+            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+
+            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
+            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+
+            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
+            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+
+            keras.layers.Flatten(),
+            keras.layers.Dense(512, activation='relu'),
+            keras.layers.Dense(5, activation='linear')  # Output layer for 5 actions
+        ])
+
+        # Compile the model
+        model.compile(loss="mse", optimizer=keras.optimizers.Adam(learning_rate=0.001), metrics=["accuracy"])
+
+        return model
+
 
     # def create_model_dt(self):# DeepTraffic
     #     model = tf.keras.Sequential()
@@ -876,12 +924,13 @@ class DQNAgent:
     def get_qs(self, state):
         qs= self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
 
-        # add weights to values
-        qs *= [0.975, 1, 0.92, 0.92, 0.92] # [left, right, speed up, slow down, stay the same] 
+        # add weights to values action_
+        qs *= [1.0, 0.7, 0.9, 0.4, 0.4] # [speed up, slow down, stay the same, left, right] 
 
         return qs
         
     def train_in_loop(self):
+        # backend.set_session(session)
         # first train is always slow, so simulate dummy train
         X = np.random.uniform(size=(1, IMG_HEIGHT, IMG_WIDTH, 3)).astype(np.float32)
         y = np.random.uniform(size=(1, 5)).astype(np.float32) # action_num
@@ -897,7 +946,7 @@ class DQNAgent:
             time.sleep(0.01)
 
 if __name__ == "__main__":
-    FPS = 60 # MODIFY THIS TO CHANGE FPS
+    FPS = 25 # MODIFY THIS TO CHANGE FPS
     ep_rewards = [-200]
 
     # set equal for repeatable results
@@ -906,8 +955,9 @@ if __name__ == "__main__":
     tf.set_random_seed(1)
 
     # required for multiple agents
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
-    backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
+    # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
+    # backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
+    # session = backend.get_session()
 
     if not os.path.exists("models"):
         os.makedirs("models")
@@ -915,11 +965,16 @@ if __name__ == "__main__":
     agent = DQNAgent()
     env = CarEnvironment()
 
-    trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
-    trainer_thread.start()
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
+    backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
+    session = backend.get_session()
+    session.run(tf.global_variables_initializer())  # Initialize variables
 
-    while not agent.training_initialised:
-        time.sleep(0.01)
+    # trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
+    # trainer_thread.start()
+
+    # while not agent.training_initialised:
+    #     time.sleep(0.01)
 
     agent.get_qs(np.ones((env.image_height, env.image_width, 3)))
 
@@ -944,12 +999,17 @@ if __name__ == "__main__":
             episode_reward += reward
             agent.update_replay_memory((current_state, action, reward, new_state, done))
 
+            agent.train()
+
             step += 1
 
             if done:
                 break
         for car in env.auto_list:
-            car.set_autopilot(False) # must be false to destroy
+            try:
+                car.set_autopilot(False) # must be false to destroy
+            except:
+                pass
 
         for actor in env.actor_list:
             actor.destroy()
@@ -972,10 +1032,10 @@ if __name__ == "__main__":
             epsilon = max(MIN_EPSILON, epsilon)
 
             # Set termination flag for training thread and wait for it to finish
-        agent.terminate = True
-        trainer_thread.join()
+        # agent.terminate = True
+        # trainer_thread.join()
 
-        if episode % 1000 == 0:
+        if episode % 125 == 0:
             agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
             
             # view model performance by running "tensorboard --logdir=logs" in the command line

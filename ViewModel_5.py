@@ -10,7 +10,7 @@ import keras.backend.tensorflow_backend as backend
 from keras.models import load_model
 from CarlaClient_5 import CarEnvironment, MEMORY_FRACTION
 
-
+# cant leverage gpu on tensorflow without downgrading cuda version (not possible on my rtx3070)
 
 MODEL_PATH = 'C:\\Temp\\models\\Xception___-27.00max_-113.50avg_-200.00min__1745582883.model'
 
@@ -37,8 +37,15 @@ if __name__ == '__main__':
 
     # Initialize predictions - first prediction takes longer as of initialization that has to be done
     # It's better to do a first prediction then before we start iterating over episode steps
-    model.predict(np.ones((1, env.image_height, env.image_width, 3)))
+    print('Loading model...')
+    
+    try:
+        model.predict(np.ones((1, env.image_height, env.image_width, 3)))
+    except Exception as e:
+        print(f"Error during model initialization: {e}")
+        exit()
 
+    
     # Loop over episodes
     while True:
 
@@ -57,15 +64,19 @@ if __name__ == '__main__':
             step_start = time.time()
 
             # Show current frame
-            cv2.imshow(f'Agent - preview', current_state)
-            cv2.waitKey(1)
+            # cv2.imshow(f'Agent - preview', current_state)
+            # cv2.waitKey(1)
 
             # Predict an action based on current observation space
             qs = model.predict(np.array(current_state).reshape(-1, *current_state.shape)/255)[0]
+            print(f"Prediction time: {time.time() - step_start:.2f}s")
+
             action = np.argmax(qs)
 
             # Step environment (additional flag informs environment to not break an episode by time limit)
+            # step_start = time.time()
             new_state, reward, done, _ = env.step(action)
+            # print(f"Environment step time: {time.time() - step_start:.2f}s")
 
             # Set current step for next loop iteration
             current_state = new_state
@@ -77,9 +88,13 @@ if __name__ == '__main__':
             # Measure step time, append to a deque, then print mean FPS for last 60 frames, q values and taken action
             frame_time = time.time() - step_start
             fps_counter.append(frame_time)
-            print(f'Agent: {len(fps_counter)/sum(fps_counter):>4.1f} FPS | '
-      f'Action: [L:{qs[0]:>5.2f}, R:{qs[1]:>5.2f}, U:{qs[2]:>5.2f}, D:{qs[3]:>5.2f}, S:{qs[4]:>5.2f}] {action}')
+            print(f'Agent: {len(fps_counter)/sum(fps_counter):>4.1f} FPS | 'f'Action: [U:{qs[0]:>5.2f}, S:{qs[1]:>5.2f}, D:{qs[2]:>5.2f}, L:{qs[3]:>5.2f}, R:{qs[4]:>5.2f}] {action}')
 
         # Destroy an actor at end of episode
         for actor in env.actor_list:
+            try:    
+                actor.set_autopilot(False)
+            except:
+                pass
+        
             actor.destroy()

@@ -20,6 +20,12 @@ CARS_ON_HIGHWAY = 10 # number of cars on highway
 WAYPOINTS_PER_LANE = 8 # number of waypoints on highway
 WAYPOINT_SEPARATION = 10.0 # distance between waypoints
 
+WAYPOINT_INDICATORS = False
+POPULATE_HIGHWAY = False
+CHANGE_LANE = False
+PLAYER_VEHICLE = False
+
+
 
 class Player:
     def __init__(self, world, bp, vel_ref=VEHICLE_VEL, max_throt=0.75, max_brake=0.3, max_steer=0.8):
@@ -341,6 +347,31 @@ def spawn_waypoint_indicators(world, waypoints, actor_list):
             if indicator:
                 actor_list.append(indicator)
           
+def change_lane(vehicle, world, direction):
+    current_transform = vehicle.get_transform()
+    current_location = current_transform.location
+    current_waypoint = world.get_map().get_waypoint(current_location)
+
+    if direction == 'l':  # Change to the left lane
+        next_waypoint = current_waypoint.get_left_lane()
+        if next_waypoint:
+            vehicle.set_transform(next_waypoint.transform)
+            print(f"Vehicle moved to the left lane: {next_waypoint.lane_id}")
+        else:
+            print("No left lane available.")
+
+    elif direction == 'r':  # Change to the right lane
+        next_waypoint = current_waypoint.get_right_lane()
+        if next_waypoint:
+            vehicle.set_transform(next_waypoint.transform)
+            print(f"Vehicle moved to the right lane: {next_waypoint.lane_id}")
+        else:
+            print("No right lane available.")
+
+    else:
+        print("Invalid direction. Use 'l' for left or 'r' for right.")
+
+
 
 def main():
     vehicle = None  # Initialize the vehicle reference
@@ -370,13 +401,14 @@ def main():
         transform = spawn_points[312]  # Start of highway
         blueprint_library = world.get_blueprint_library()
         vehicle_bp = blueprint_library.find('vehicle.nissan.micra')
-        world.try_spawn_actor(vehicle_bp, transform)
+        actor = world.try_spawn_actor(vehicle_bp, transform)
 
         waypoints = generate_lane_waypoints_infront(world)
         print(f"Spawned {len(waypoints)} waypoint indicators ahead of the vehicle.")
+        
         spawn_waypoint_indicators(world, waypoints, actor_list)
 
-        while True:
+        while WAYPOINT_INDICATORS:
             num = input("Enter number of waypoints to spawn: ")
             sep = input("Enter separation between waypoints: ")
             for actor in actor_list:
@@ -406,28 +438,43 @@ def main():
                 waypoints["lane4"][i]
             ]
             all_waypoints.append(batch)
-        
 
-        while True:
+        while POPULATE_HIGHWAY:
             populate_autopilot_cars(world, all_waypoints, actor_list, auto_list)
 
-            input("")
+            inp = input("")
+
+
             for actor in actor_list:
                 actor.destroy()
-            
+
             actor_list = []  # List to keep track of spawned actors
+
+            if inp == "y":
+                break
+        
+        while CHANGE_LANE:
+            command = input("Enter 'l' to change to the left lane, 'r' to change to the right lane, or 'q' to quit: ")
+            if command == 'q':
+                break
+            elif command in ['l', 'r']:
+                change_lane(actor, world, command)
+            else:
+                print("Invalid command.")
+
         
         # Spawn another vehicle ahead at spawn point 296
         # spawn_vehicle_ahead(world, spawn_points[296])
 
 
         # Create the player
-        player = Player(world, vehicle_bp)
+        if PLAYER_VEHICLE:
+            player = Player(world, vehicle_bp)
 
-        populate_autopilot_cars(world, waypoints, actor_list, auto_list, num_cars=10)
+        # populate_autopilot_cars(world, waypoints, actor_list, auto_list, num_cars=10)
 
         # Perform lane change maneuvers
-        while False:
+        while PLAYER_VEHICLE:
             player.update_spectator()
             maneuver = input("Enter maneuver (l: left lane change, r: right lane change, d: draw waypoints): ")
             if maneuver == "l":
