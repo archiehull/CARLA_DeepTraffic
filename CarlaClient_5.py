@@ -61,6 +61,7 @@ IMG_WIDTH, IMG_HEIGHT = 640, 480
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
 
+LEARNING_RATE = 0.001
 REPLAY_MEMORY_SIZE = 2000
 MIN_REPLAY_SIZE = 1000
 MINIBATCH_SIZE = 8
@@ -110,6 +111,7 @@ def export_constants_to_txt():
         "THREADED": THREADED,
         "FPS": FPS,
         "\n" : "",
+        "LEARNING_RATE": LEARNING_RATE,
         "REPLAY_MEMORY_SIZE": REPLAY_MEMORY_SIZE,
         "MIN_REPLAY_SIZE": MIN_REPLAY_SIZE,
         "MINIBATCH_SIZE": MINIBATCH_SIZE,
@@ -777,7 +779,7 @@ class DQNAgent:
 
         predictions = Dense(5, activation="linear")(x) # Output layer == action_num
         model = Model(inputs=base_model.input, outputs=predictions)
-        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
+        model.compile(loss="mse", optimizer=Adam(lr=LEARNING_RATE), metrics=["accuracy"])
         return model
 
     def create_model_64(self):
@@ -799,7 +801,7 @@ class DQNAgent:
         ])
 
         # Compile the model
-        model.compile(loss="mse", optimizer=keras.optimizers.Adam(learning_rate=0.001), metrics=["accuracy"])
+        model.compile(loss="mse", optimizer=keras.optimizers.Adam(learning_rate=LEARNING_RATE), metrics=["accuracy"])
 
         return model
 
