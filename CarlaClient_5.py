@@ -1,6 +1,11 @@
-# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0 (GPU version requires CUDA 10), Keras 2.2.4, h5py 2.10.0, CARLA 0.9.13, Numpy 1.16.4, OpenCV 4.5.3
+# FILE MUST RUN IN PYTHON 3.6.8, Tensorflow 1.14.0 (GPU version requires CUDA 10), Keras 2.2.5, h5py 2.10.0, CARLA 0.9.13, Numpy 1.16.4, OpenCV 4.5.3
 
 from platform import python_version
+
+import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '2'
 
 try:
     import carla
@@ -21,16 +26,9 @@ except ImportError:
     input("\nPress Enter to exit")
     exit()
 
-import os
-import warnings
-from contextlib import redirect_stdout
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
 import tensorflow as tf
 # Use TensorFlow's compatibility mode for deprecated APIs
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
 
 import math
 import random
@@ -54,6 +52,8 @@ from tqdm import tqdm
 
 print("\nPreparing Client...\n")
 
+THREADED = True
+
 # Image parameters
 SHOW_PREVIEW = False
 IMG_WIDTH, IMG_HEIGHT = 640, 480
@@ -61,35 +61,86 @@ IMG_WIDTH, IMG_HEIGHT = 640, 480
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
 
-REPLAY_MEMORY_SIZE = 5000
+REPLAY_MEMORY_SIZE = 2000
 MIN_REPLAY_SIZE = 1000
-MINIBATCH_SIZE = 16
+MINIBATCH_SIZE = 8
 PREDICTION_BATCH_SIZE = 1
 TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
 UPDATE_TARGET_EVERY = 5
 
+# model_setup
+MODEL_NAME = "64x3"
 # MODEL_NAME = "Xception"
-MODEL_NAME = "64x3CNN"
+# MODEL_NAME = "64x3CNN"
+
 
 MEMORY_FRACTION = 0.8 # allocates 80% of processing power to avoid overconsuption (test)
 MIN_REWARD = -200
 
-EPISODES = 5000
+EPISODES = 7500
 
 DISCOUNT = 0.99
 epsilon = 1
-EPSILON_DECAY = 0.999 ## tend towards 1.0 depeninding on # of steps
+EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
 MIN_EPSILON = 0.1
 
-CARS_ON_HIGHWAY = 30 # number of cars on highway -20
-WAYPOINTS_PER_LANE = 25 # number of waypoints on highway -16
-WAYPOINT_SEPARATION = 10.0 # distance between waypoints
+Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [speed up, slow down, stay the same, left, right] 
 
 AGGREGATE_STATS_EVERY = 10
+
+POPULATE_CARS = True # True: Cars on highway, False: spawn obstacles
+
+CARS_ON_HIGHWAY = 20 # number of cars on highway -20
+WAYPOINTS_PER_LANE = 16 # number of waypoints on highway -16
+WAYPOINT_SEPARATION = 7.0 # distance between waypoints
+
+AUTOPILOT = True # spawn cars with autopilot
 
 # Own Tensorboard class
 # run "tensorboard --logdir=logs/" in terminal to view tensorboard
 # http://localhost:6006/
+
+def export_constants_to_txt():
+    filename = f"models/{MODEL_NAME}_{int(time.time())}.txt"
+
+    constants = {
+        "MODEL_NAME": MODEL_NAME,
+        "IMG_WIDTH": IMG_WIDTH,
+        "IMG_HEIGHT": IMG_HEIGHT,
+        "THREADED": THREADED,
+        "FPS": FPS,
+        "\n" : "",
+        "REPLAY_MEMORY_SIZE": REPLAY_MEMORY_SIZE,
+        "MIN_REPLAY_SIZE": MIN_REPLAY_SIZE,
+        "MINIBATCH_SIZE": MINIBATCH_SIZE,
+        "PREDICTION_BATCH_SIZE": PREDICTION_BATCH_SIZE,
+        "TRAINING_BATCH_SIZE": TRAINING_BATCH_SIZE,
+        "UPDATE_TARGET_EVERY": UPDATE_TARGET_EVERY,
+        "MEMORY_FRACTION": MEMORY_FRACTION,
+        "MIN_REWARD": MIN_REWARD,
+        "EPISODES": EPISODES,
+        "EPISODE_LENGTH": EPISODE_LENGTH,
+        "DISCOUNT": DISCOUNT,
+        "epsilon": epsilon,
+        "EPSILON_DECAY": EPSILON_DECAY,
+        "MIN_EPSILON": MIN_EPSILON,
+        "AGGREGATE_STATS_EVERY": AGGREGATE_STATS_EVERY,
+        "Q_WEIGHTS": Q_WEIGHTS,
+        "\n" : "",
+        "POPULATE_CARS": POPULATE_CARS,
+        "AUTOPILOT": AUTOPILOT,
+        "CARS_ON_HIGHWAY": CARS_ON_HIGHWAY,
+        "WAYPOINTS_PER_LANE": WAYPOINTS_PER_LANE,
+        "WAYPOINT_SEPARATION": WAYPOINT_SEPARATION,
+        "SHOW_PREVIEW": SHOW_PREVIEW
+
+    }
+
+    # Write constants to the file
+    with open(filename, "w") as file:
+        for key, value in constants.items():
+            file.write(f"{key}: {value}\n")
+    print(f"Constants exported to {filename}.")
 
 class ModifiedTensorBoard(TensorBoard):
 
@@ -409,7 +460,6 @@ class CarEnvironment:
     def populate_autopilot_cars(self, all_waypoints, num_cars=10):
         # Shuffle the waypoints to randomize spawn locations
         selected_waypoints = [random.choice(row) for row in all_waypoints if row]
-        # print(len(all_waypoints), "waypoints available for spawning cars.")
 
         # Spawn cars at random waypoints
         for i in range(min(num_cars, len(selected_waypoints))):
@@ -427,7 +477,8 @@ class CarEnvironment:
             vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
             if vehicle:
                 # Enable autopilot
-                # vehicle.set_autopilot(True)
+                if AUTOPILOT:
+                    vehicle.set_autopilot(True)
 
                 # Add the vehicle to the actor list for cleanup later
                 self.actor_list.append(vehicle)
@@ -445,108 +496,60 @@ class CarEnvironment:
             spawn_transform = spawn_waypoint.transform
             spawn_transform.location.z += 1.0
 
-            # vehicle_bp = random.choice(self.bp_lib.filter('static.prop.vendingmachine'))
-            vehicle_bp = random.choice(self.bp_lib.filter('vehicle.toyota.prius'))
+            vehicle_bp = random.choice(self.bp_lib.filter('static.prop.vendingmachine'))
 
 
             vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
             if vehicle:
                 self.actor_list.append(vehicle)
 
-    '''
-        def change_lane(self, direction, max_duration=5.0, steer_sensitivity=0.05):
-
-            if direction not in ["left", "right"]:
-                print("Invalid direction. Use 'left' or 'right'.")
-                return
-
-            # Get the current waypoint
-            current_transform = self.vehicle.get_transform()
-            current_waypoint = self.world.get_map().get_waypoint(current_transform.location)
-
-            # Get the target waypoint in the adjacent lane
-            if direction == "left":
-                target_waypoint = current_waypoint.get_left_lane()
-            elif direction == "right":
-                target_waypoint = current_waypoint.get_right_lane()
-
-            if not target_waypoint:
-                print(f"No {direction} lane available.")
-                return
-
-            # Start lane change
-            start_time = time.time()
-            while time.time() - start_time < max_duration:
-                # Get the vehicle's current position
-                current_transform = self.vehicle.get_transform()
-                current_location = current_transform.location
-
-                # Calculate the distance to the target waypoint
-                target_location = target_waypoint.transform.location
-                distance = current_location.distance(target_location)
-
-                # Calculate the angle to the target waypoint
-                forward_vector = current_transform.get_forward_vector()
-                direction_vector = carla.Vector3D(
-                    target_location.x - current_location.x,
-                    target_location.y - current_location.y,
-                    0
-                )
-                dot_product = (forward_vector.x * direction_vector.x +
-                            forward_vector.y * direction_vector.y)
-                magnitude_product = (math.sqrt(forward_vector.x**2 + forward_vector.y**2) *
-                                    math.sqrt(direction_vector.x**2 + direction_vector.y**2))
-                angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
-
-                # Adjust steering based on the angle
-                steer = steer_sensitivity * angle if direction == "right" else -steer_sensitivity * angle
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=steer))
-
-                # Check if the vehicle is close enough to the target waypoint
-                if distance < 1.0:  # Threshold for lane alignment
-                    print(f"Lane change to the {direction} completed.")
-                    break
-
-                time.sleep(0.05)  # Small delay for smooth control
-
-            # Ensure the vehicle is driving straight
-            self.ensure_straight_driving(target_waypoint)
-
-        def ensure_straight_driving(self, waypoint):
-            while True:
-                # Get the vehicle's current transform
-                current_transform = self.vehicle.get_transform()
-
-                # Calculate the angle between the vehicle's forward vector and the waypoint's forward vector
-                vehicle_forward = current_transform.get_forward_vector()
-                waypoint_forward = waypoint.transform.get_forward_vector()
-
-                dot_product = (vehicle_forward.x * waypoint_forward.x +
-                            vehicle_forward.y * waypoint_forward.y)
-                magnitude_product = (math.sqrt(vehicle_forward.x**2 + vehicle_forward.y**2) *
-                                    math.sqrt(waypoint_forward.x**2 + waypoint_forward.y**2))
-                angle = math.acos(dot_product / magnitude_product) if magnitude_product != 0 else 0
-
-                # If the angle is small (close to 0), the vehicle is driving straight
-                if abs(angle) < 0.05:  # Adjust threshold as needed
-                    print("Vehicle is driving straight.")
-                    break
-
-                # Apply small steering corrections to align the vehicle
-                correction = -0.1 if angle > 0 else 0.1
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, steer=correction))
-                time.sleep(0.05)
-    '''
-
     # RL functions
     def __init__(self):
+
         print("\nInitialising Environment...\n")
-        self.client = carla.Client("localhost", 2000)
 
-        # self.world = self.client.get_world()
+        # Connect to CARLA
+        attempts = 0
+        while attempts < 3:
+            try:
+                self.client = carla.Client("localhost", 2000)
+                break  # Exit the loop if no error occurs
+            except Exception as e:
+                if attempts != 0:
+                    print(f"Failed to Connect to Carla Environment: \n{e}") 
+                attempts += 1
+                if attempts < 3:
+                    print(f"Retrying Connection in 10 seconds... (Attempt {attempts}/3)")
+                    time.sleep(10)
+                else:
+                    user_input = input("Failed connection after {attempts} attempts reached. \nPlease close any instances of CARLA and retry\n Press 'y' to retry or Enter to exit: ")
+                    if user_input.lower() == 'y':
+                        attempts = 0  # Reset attempts and retry
+                    else:
+                        print("Exiting...")
+                        exit()
 
-        # map 4 simulates highway
-        self.world = self.client.load_world('Town04_OPT', carla.MapLayer.Buildings|carla.MapLayer.ParkedVehicles)
+        # Load the world
+        attempts = 0
+        while attempts < 3:
+            try:
+                self.world = self.client.load_world('Town04_OPT', carla.MapLayer.Buildings|carla.MapLayer.ParkedVehicles)
+                break  # Exit the loop if no error occurs
+            except Exception as e:
+                if attempts != 0:
+                    print(f"Carla Environment not responding: \n{e}") 
+                attempts += 1
+                if attempts < 3:
+                    print(f"Retrying Response in 10 seconds... (Attempt {attempts}/3)")
+                    time.sleep(10)
+                else:
+                    user_input = input("Failed response after {attempts} attempts reached. \nPlease close any instances of CARLA and retry\n Press 'y' to retry or Enter to exit: ")
+                    if user_input.lower() == 'y':
+                        attempts = 0  # Reset attempts and retry
+                    else:
+                        print("Exiting...")
+                        exit()
+
         self.world.set_weather(carla.WeatherParameters.ClearNoon)
         self.world.unload_map_layer(carla.MapLayer.Buildings)
         self.world.unload_map_layer(carla.MapLayer.ParkedVehicles)
@@ -556,9 +559,10 @@ class CarEnvironment:
 
         self.fixed_location = carla.Location(x=9.497402, y=214.450912, z=0.281942) #spawn 312
 
-        lane_waypoints = self.generate_lane_waypoints_0_100()
-
-
+        if AUTOPILOT:
+            lane_waypoints = self.generate_lane_waypoints_25_75()
+        else:
+            lane_waypoints = self.generate_lane_waypoints_0_100()
 
         self.all_waypoints = []
         for i in range(WAYPOINTS_PER_LANE):
@@ -569,13 +573,11 @@ class CarEnvironment:
                 lane_waypoints["lane4"][i]
             ]
             self.all_waypoints.append(batch)
-        
-
 
         self.set_spectator()
 
         # Warm up the Traffic Manager
-        vehicle_bp = self.bp_lib.find('vehicle.audi.tt')  # Use any vehicle blueprint
+        vehicle_bp = self.bp_lib.find('vehicle.toyota.prius')  # Use any vehicle blueprint
         spawn_points = self.world.get_map().get_spawn_points()
 
         # Spawn a temporary vehicle
@@ -584,7 +586,6 @@ class CarEnvironment:
             temp_vehicle.set_autopilot(True)  # Enable autopilot
             time.sleep(2)  # Allow time for the Traffic Manager to initialize
             temp_vehicle.destroy()  # Destroy the temporary vehicle
-
 
     def set_spectator(self):
         # Define the fixed location
@@ -611,31 +612,6 @@ class CarEnvironment:
         spectator.set_transform(carla.Transform(spectator_location, spectator_rotation))
         #print("Spectator position updated based on fixed location.")
 
-
-    def spawn_vehicle_ahead(self, spawn_point):
-       # print(f"Spawning vehicle at {spawn_point.location}")
-
-        # Define the spawn transform for the new vehicle
-        spawn_transform = carla.Transform(
-            location=spawn_point.location,
-            rotation=spawn_point.rotation
-        )
-
-        # Find a vehicle blueprint
-        vehicle_bp = self.bp_lib.find('vehicle.toyota.prius')  # Replace with desired object for demo
-        # vehicle_bp = self.bp_lib.find('static.prop.vendingmachine')  # Replace with desired object for demo
-
-        # Try to spawn the vehicle
-        new_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
-        if new_vehicle:
-           # print(f"Vehicle spawned successfully")
-            self.actor_list.append(new_vehicle)  # Add to the actor list for cleanup
-            return new_vehicle
-        else:
-            #print("Failed to spawn vehicle")
-            return None
-
-
     def reset(self):
         # reset lists
         self.collision_list = []
@@ -645,16 +621,16 @@ class CarEnvironment:
         # spawn agent
         spawn_points = self.world.get_map().get_spawn_points()
 
-        #self.transform = random.choice(spawn_points) # random location
         self.transform = spawn_points[312] # start of highway
-
 
         self.vehicle = self.world.spawn_actor(self.vehicle_bp, self.transform)
         self.actor_list.append(self.vehicle)
 
-        self.spawn_obstacles(self.all_waypoints, num_cars=10) # spawn obstacles 
-        # self.populate_autopilot_cars(self.all_waypoints, num_cars=CARS_ON_HIGHWAY) # populate highway (high numbers may peak CPU usage)
-        
+        if POPULATE_CARS:
+            self.populate_autopilot_cars(self.all_waypoints, num_cars=CARS_ON_HIGHWAY) # populate highway (high numbers may peak CPU usage)
+        else:
+            self.spawn_obstacles(self.all_waypoints, num_cars=10) # spawn obstacles 
+
         time.sleep(0.5) # wait for cars to spawn
 
         for car in self.auto_list:
@@ -679,7 +655,11 @@ class CarEnvironment:
         self.camera.listen(lambda image: self.process_img(image))
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
+        if AUTOPILOT:
+            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, brake=0.0)) # match speed of other cars
+        else:
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
+
         # avoid taking input during init
         time.sleep(4)
 
@@ -698,7 +678,10 @@ class CarEnvironment:
         self.episode_start = time.time()
 
         # send vehicle control to improve agent response time
-        self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
+        if AUTOPILOT:
+            self.vehicle.apply_control(carla.VehicleControl(throttle=10.0, brake=0.0)) # match speed of other cars
+        else:
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.1, brake=0.0))
 
         return self.front_camera
     
@@ -712,21 +695,21 @@ class CarEnvironment:
         if action == 3:  # Change to the left lane
             # TODO, write lane change script instead of spawning
             #env.change_lane("left")
-             next_waypoint = current_waypoint.get_left_lane()
-             if next_waypoint:
-                 self.vehicle.set_transform(next_waypoint.transform)
+            next_waypoint = current_waypoint.get_left_lane()
+            if next_waypoint:
+                self.vehicle.set_transform(next_waypoint.transform)
 
         elif action == 4:  # Change to the right lane
             #env.change_lane("right")
-             next_waypoint = current_waypoint.get_right_lane()
-             if next_waypoint:
-                 self.vehicle.set_transform(next_waypoint.transform)
+            next_waypoint = current_waypoint.get_right_lane()
+            if next_waypoint:
+                self.vehicle.set_transform(next_waypoint.transform)
 
         elif action == 0:  # Speed up
             self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
 
         elif action == 2:  # Slow down
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, brake=0.5))
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.8))
 
         elif action == 1:  # Stay the same
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
@@ -738,7 +721,7 @@ class CarEnvironment:
         if len(self.collision_list) != 0:
             done = True
             reward = -1  # Penalty for collision
-        elif next_waypoint == -5 or next_waypoint == 1: # Check if the vehicle is off the road
+        elif next_waypoint is not None and (next_waypoint.lane_id == -5 or next_waypoint.lane_id == 1): # Check if the vehicle is off the road
             done = True
             reward = -1
         elif speed_kmh < 50:
@@ -752,27 +735,33 @@ class CarEnvironment:
         if self.episode_start + EPISODE_LENGTH < time.time():
             done = True
 
-        return self.front_camera, reward, done, None
-    
+        return self.front_camera, reward, done, None 
 
 class DQNAgent:
     def __init__(self):
+        # model_setup
         self.model = self.create_model_64() # create model
         self.target_model = self.create_model_64() # create target model
 
-        # Build models by running a dummy forward pass
-        # dummy_input = np.random.rand(1, IMG_HEIGHT, IMG_WIDTH, 3).astype(np.float32)
-        # self.model.predict(dummy_input)
-        # self.target_model.predict(dummy_input)
+        # self.model = self.create_model_x() # create model
+        # self.target_model = self.create_model_x() # create target model
 
         self.target_model.set_weights(self.model.get_weights())
+
+        # self.model = None
+        # self.target_model = None
 
         self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
 
         self.tensorboard = ModifiedTensorBoard(log_dir=f"logs/{MODEL_NAME}-{int(time.time())}") # by @sentdex, minimises unnecessary updates and exports, imporving performance
         self.target_update_counter = 0
-        self.graph = tf.get_default_graph()
 
+        if THREADED:
+            self.graph = tf.get_default_graph()
+            self.session = backend.get_session()
+            with self.graph.as_default():
+                with self.session.as_default():
+                    self.session.run(tf.global_variables_initializer())
 
         self.terminate = False
         self.last_logged_episode = 0
@@ -788,36 +777,7 @@ class DQNAgent:
 
         predictions = Dense(5, activation="linear")(x) # Output layer == action_num
         model = Model(inputs=base_model.input, outputs=predictions)
-        model.compile(loss="mse", optimizer=Adam(lr=0.0001), metrics=["accuracy"])
-        return model
-    
-    def create_model_64_x(self):  # 3 x 64
-
-    # TODO: FIX THIS MODEL AND WRITE NEW
-
-        inputs = tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH, 3))  # Define the input layer
-
-        # Add convolutional and pooling layers
-        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(inputs)
-        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
-
-        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
-        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
-
-        x = tf.keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu')(x)
-        x = tf.keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same')(x)
-
-        # Flatten the output and add dense layers
-        x = tf.keras.layers.Flatten()(x)
-        x = tf.keras.layers.Dense(512, activation='relu')(x)
-        outputs = tf.keras.layers.Dense(5, activation='linear')(x)  # Output layer action_num
-
-        # Create the model
-        model = tf.keras.Model(inputs=inputs, outputs=outputs)
-
-        # Compile the model
-        model.compile(loss="mse", optimizer=tf.keras.optimizers.Adam(lr=0.001), metrics=["accuracy"])
-
+        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=["accuracy"])
         return model
 
     def create_model_64(self):
@@ -843,32 +803,30 @@ class DQNAgent:
 
         return model
 
+    def create_model_dt(self):# DeepTraffic
+        model = tf.keras.Sequential()
+        model.add(tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH,3)))  # Input layer
 
-    # def create_model_dt(self):# DeepTraffic
-    #     model = tf.keras.Sequential()
-    #     model.add(tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH,3)))  # Input layer
+        # Fully connected layers with 'tanh' activation
+        model.add(tf.keras.layers.Dense(36, activation='tanh'))
+        model.add(tf.keras.layers.Dense(24, activation='tanh'))
+        model.add(tf.keras.layers.Dense(24, activation='tanh'))
+        model.add(tf.keras.layers.Dense(24, activation='tanh'))
 
-    #     # Fully connected layers with 'tanh' activation
-    #     model.add(tf.keras.layers.Dense(36, activation='tanh'))
-    #     model.add(tf.keras.layers.Dense(24, activation='tanh'))
-    #     model.add(tf.keras.layers.Dense(24, activation='tanh'))
-    #     model.add(tf.keras.layers.Dense(24, activation='tanh'))
+        # Output layer with linear activation for regression
+        model.add(tf.keras.layers.Dense(3, activation='linear'))
 
-    #     # Output layer with linear activation for regression
-    #     model.add(tf.keras.layers.Dense(3, activation='linear'))
+        predictions = tf.keras.layers.Dense(3, activation='linear')(model.output)
+        model = Model(inputs=model.input, outputs=predictions)
 
-    #     predictions = tf.keras.layers.Dense(3, activation='linear')(model.output)
-    #     # model = Model(inputs=model.input, outputs=predictions)
+        # Compile the model
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            loss='mse',
+            metrics=['accuracy']
+        )
 
-    #     # # Compile the model
-    #     # model.compile(
-    #     #     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-    #     #     loss='mse',
-    #     #     metrics=['accuracy']
-    #     # )
-
-    #     return model
-
+        return model
 
     def update_replay_memory(self, transition):
         # transition = (current_state, action, reward, new_state, done)
@@ -881,15 +839,22 @@ class DQNAgent:
         minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
 
         current_states = np.array([transition[0] for transition in minibatch])/255
-        with self.graph.as_default():
-            # predict current Q values for all states in minibatch
+
+        if THREADED:
+            with self.graph.as_default():
+                # predict current Q values for all states in minibatch
+                current_qs_list = self.model.predict(current_states, batch_size=PREDICTION_BATCH_SIZE)
+        else:
             current_qs_list = self.model.predict(current_states, batch_size=PREDICTION_BATCH_SIZE)
 
         new_current_states = np.array([transition[3] for transition in minibatch])/255
-        with self.graph.as_default():
-            # predict future Q values for all states in minibatch
-            future_qs_list = self.target_model.predict(new_current_states, batch_size=PREDICTION_BATCH_SIZE)
 
+        if THREADED:
+            with self.graph.as_default():
+                # predict future Q values for all states in minibatch
+                future_qs_list = self.target_model.predict(new_current_states, batch_size=PREDICTION_BATCH_SIZE)
+        else: 
+            future_qs_list = self.target_model.predict(new_current_states, batch_size=PREDICTION_BATCH_SIZE)
         X = []
         y = []
 
@@ -911,8 +876,12 @@ class DQNAgent:
             log_this_step = True
             self.last_logged_episode = self.tensorboard.step
 
-        with self.graph.as_default():
+        if THREADED:
+            with self.graph.as_default():
+                self.model.fit(np.array(X)/255, np.array(y), batch_size=TRAINING_BATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if log_this_step else None)
+        else:
             self.model.fit(np.array(X)/255, np.array(y), batch_size=TRAINING_BATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if log_this_step else None)
+
 
         if log_this_step:
             self.target_update_counter += 1
@@ -921,21 +890,32 @@ class DQNAgent:
             self.target_model.set_weights(self.model.get_weights())
             self.target_update_counter = 0
     
-    def get_qs(self, state):
-        qs= self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
-
+    def get_qs(self, state): # can cause silent exit on first call
+        try:
+            if THREADED:
+                with self.graph.as_default():
+                    qs= self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
+            else:
+                qs = self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
+        except Exception as e:
+            print(f"Error in agent.get_qs(): {e}")
         # add weights to values action_
-        qs *= [1.0, 0.7, 0.9, 0.4, 0.4] # [speed up, slow down, stay the same, left, right] 
+        qs *= Q_WEIGHTS
 
         return qs
         
     def train_in_loop(self):
-        # backend.set_session(session)
-        # first train is always slow, so simulate dummy train
-        X = np.random.uniform(size=(1, IMG_HEIGHT, IMG_WIDTH, 3)).astype(np.float32)
-        y = np.random.uniform(size=(1, 5)).astype(np.float32) # action_num
-        with self.graph.as_default():
-            self.model.fit(X, y, batch_size=1, verbose=0)
+        # first train is always slow, so simulate dummy train (causes crashes on non xception models)
+
+        # X = np.random.uniform(size=(1, IMG_HEIGHT, IMG_WIDTH, 3)).astype(np.float32)
+        # y = np.random.uniform(size=(1, 5)).astype(np.float32) # action_num
+        # with self.graph.as_default():
+        #     with self.session.as_default():
+        #         try:
+        #             self.model.fit(X, y, batch_size=1, verbose=0)
+        #         except Exception as e:
+        #             print(f"Error in training thread: {e}")
+        #             return
         
         self.training_initialised = True
 
@@ -946,96 +926,107 @@ class DQNAgent:
             time.sleep(0.01)
 
 if __name__ == "__main__":
-    FPS = 25 # MODIFY THIS TO CHANGE FPS
-    ep_rewards = [-200]
+    try:
+        FPS = 25 # MODIFY THIS TO CHANGE FPS
+        ep_rewards = [-200]
 
-    # set equal for repeatable results
-    random.seed(1)
-    np.random.seed(1)
-    tf.set_random_seed(1)
+        # set equal for repeatable results
+        random.seed(1)
+        np.random.seed(1)
+        tf.set_random_seed(1)
 
-    # required for multiple agents
-    # gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
-    # backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
-    # session = backend.get_session()
+        # required for multiple agents)
+        if THREADED:
+            gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
+            backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
 
-    if not os.path.exists("models"):
-        os.makedirs("models")
+        if not os.path.exists("models"):
+            os.makedirs("models")
 
-    agent = DQNAgent()
-    env = CarEnvironment()
+        agent = DQNAgent()
+        
+        env = CarEnvironment()
 
-    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION) 
-    backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
-    session = backend.get_session()
-    session.run(tf.global_variables_initializer())  # Initialize variables
+    
+        if THREADED:
+            trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
+            trainer_thread.start()
 
-    # trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
-    # trainer_thread.start()
+            while not agent.training_initialised:
+                time.sleep(0.01)
 
-    # while not agent.training_initialised:
-    #     time.sleep(0.01)
+        
+        qs = agent.get_qs(np.ones((env.image_height, env.image_width, 3))) # can silent exit
 
-    agent.get_qs(np.ones((env.image_height, env.image_width, 3)))
 
-    for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit="episodes"):
-        env.collision_list = []
-        agent.tensorboard.step = episode
-        episode_reward = 0
-        step = 1
-        current_state = env.reset()
-        done = False
-        episode_start = time.time()
+        for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit="episodes"):
+            env.collision_list = []
+            agent.tensorboard.step = episode
+            episode_reward = 0
+            step = 1
+            current_state = env.reset()
+            done = False
+            episode_start = time.time()
 
-        # choose action
-        while True:
-            if np.random.random() < epsilon:
-                action = np.argmax(agent.get_qs(current_state))
-            else:
-                action = np.random.randint(0, 5) # random action action_num
-                time.sleep(1/FPS)
+            # choose action
+            while True:
+                if np.random.random() < epsilon:
+                    action = np.argmax(agent.get_qs(current_state))
+                else:
+                    action = np.random.randint(0, 5) # random action action_num
+                    time.sleep(1/FPS)
 
-            new_state, reward, done, _ = env.step(action)
-            episode_reward += reward
-            agent.update_replay_memory((current_state, action, reward, new_state, done))
+                new_state, reward, done, _ = env.step(action)
+                episode_reward += reward
+                agent.update_replay_memory((current_state, action, reward, new_state, done))
 
-            agent.train()
+                if not THREADED:
+                    agent.train()
 
-            step += 1
+                step += 1
 
-            if done:
-                break
-        for car in env.auto_list:
-            try:
-                car.set_autopilot(False) # must be false to destroy
-            except:
-                pass
+                if done:
+                    break
+            for car in env.auto_list:
+                try:
+                    car.set_autopilot(False) # must be false to destroy
+                except:
+                    pass
 
-        for actor in env.actor_list:
-            actor.destroy()
+            for actor in env.actor_list:
+                actor.destroy()
 
-        # Append episode reward to a list and log stats (every given number of episodes)
-        ep_rewards.append(episode_reward)
-        if not episode % AGGREGATE_STATS_EVERY or episode == 1:
-            average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+            # Append episode reward to a list and log stats (every given number of episodes)
+            ep_rewards.append(episode_reward)
+            if not episode % AGGREGATE_STATS_EVERY or episode == 1:
+                average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
+                min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
+                max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
+                agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
 
-            # Save model, but only when min reward is greater or equal a set value
-            # if min_reward >= MIN_REWARD:
-            #     agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                # Save model, but only when min reward is greater or equal a set value
+                if min_reward >= MIN_REWARD:
+                    agent.model.save(f'models/W_{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
 
-        # Decay epsilon
-        if epsilon > MIN_EPSILON:
-            epsilon *= EPSILON_DECAY
-            epsilon = max(MIN_EPSILON, epsilon)
+            # Decay epsilon
+            if epsilon > MIN_EPSILON:
+                epsilon *= EPSILON_DECAY
+                epsilon = max(MIN_EPSILON, epsilon)
 
             # Set termination flag for training thread and wait for it to finish
-        # agent.terminate = True
-        # trainer_thread.join()
+            if THREADED:
+                agent.terminate = True
+                trainer_thread.join()
 
-        if episode % 125 == 0:
-            agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
-            
-            # view model performance by running "tensorboard --logdir=logs" in the command line
+            if episode % 125 == 0:
+                agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                # view model performance by running "tensorboard --logdir=logs" in the command line
+
+            if episode == 500:
+                export_constants_to_txt()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.\n")
+    # finally:
+    #     export_constants = input("Export constants to txt? (y/n): ")
+    #     if export_constants.lower() == 'y':
+    #         export_constants_to_txt()
