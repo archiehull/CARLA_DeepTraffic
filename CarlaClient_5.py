@@ -58,9 +58,11 @@ THREADED = True
 SHOW_PREVIEW = False
 PRINT_ACTIONS = False
 PRINT_QS = False
-IMG_WIDTH, IMG_HEIGHT = 640, 480
+# IMG_WIDTH, IMG_HEIGHT = 640, 480
+IMG_WIDTH, IMG_HEIGHT = 320, 240
 
-FPS = 30
+
+FPS = 60
 
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
@@ -658,33 +660,22 @@ class CarEnvironment:
 
         if action == 0:  # Change to the left lane
             # TODO, write lane change script instead of spawning
-            #env.change_lane("left")
             next_waypoint = current_waypoint.get_left_lane()
             if next_waypoint:
                 self.vehicle.set_transform(next_waypoint.transform)
 
         elif action == 1:  # Change to the right lane
-            #env.change_lane("right")
             next_waypoint = current_waypoint.get_right_lane()
             if next_waypoint:
                 self.vehicle.set_transform(next_waypoint.transform)
 
-        # Handle speed-related actions (model-dependent)
-        elif MODEL_NAME == "64x3":
-            if action == 4:  # Speed up
-                self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
-            elif action == 2:  # Slow down
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.5))
-            elif action == 3:  # Stay the same
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
-        
-        elif MODEL_NAME == "Xception":
-            if action == 2:  # Speed up
-                self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
-            elif action == 4:  # Slow down
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.5))
-            elif action == 3:  # Stay the same
-                self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
+        elif action == 2:  # Speed up
+            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
+        elif action == 3:  # Stay the same
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
+        elif action == 4:  # Slow down
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.5))
+
 
 
         velocity = self.vehicle.get_velocity()
@@ -1023,7 +1014,7 @@ if __name__ == "__main__":
                     action = np.argmax(agent.get_qs(current_state))
                 else:
                     action = np.random.randint(0, 5) # random action action_num
-                    time.sleep(1/FPS)
+                    # time.sleep(1/FPS)
 
                 new_state, reward, done, _ = env.step(action)
                 episode_reward += reward
