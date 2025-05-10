@@ -54,13 +54,16 @@ print("\nPreparing Client...\n")
 
 THREADED = True
 
+# Debugging
 SHOW_PREVIEW = False
 PRINT_ACTIONS = False
 PRINT_QS = False
+PRINT_TIMES = False
 
 FPS = 60
 
 IMG_WIDTH, IMG_HEIGHT = 640, 480
+# IMG_WIDTH, IMG_HEIGHT = 320, 240
 
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
@@ -1009,7 +1012,13 @@ if __name__ == "__main__":
             # choose action
             while True:
                 if np.random.random() < epsilon:
-                    action = np.argmax(agent.get_qs(current_state))
+                    if PRINT_TIMES:
+                        start_pred = time.time()
+                        action = np.argmax(agent.get_qs(current_state))
+                        end_pred = time.time()
+                        print(f"\nPrediction time: {end_pred - start_pred:.2f}s")
+                    else:
+                        action = np.argmax(agent.get_qs(current_state))
                 else:
                     action = np.random.randint(0, 5) # random action action_num
                     # time.sleep(1/FPS)
