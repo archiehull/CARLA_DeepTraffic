@@ -883,8 +883,8 @@ class DQNAgent:
 
     def train(self):
         if len(self.replay_memory) < MIN_REPLAY_SIZE:
-            if len(self.replay_memory) == 999:
-                # print("\nExploration phase finished")
+            # if len(self.replay_memory) == 999:
+            #     print("\nExploration phase finished")
             return
 
         minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
