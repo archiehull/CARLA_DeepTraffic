@@ -60,6 +60,8 @@ PRINT_ACTIONS = False
 PRINT_QS = False
 IMG_WIDTH, IMG_HEIGHT = 640, 480
 
+FPS = 30
+
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
 
@@ -977,7 +979,6 @@ class DQNAgent:
 
 if __name__ == "__main__":
     try:
-        FPS = 60 # MODIFY THIS TO CHANGE FPS
         ep_rewards = [-200]
 
         # set equal for repeatable results
@@ -1073,7 +1074,3 @@ if __name__ == "__main__":
                 export_constants_to_txt()
     except KeyboardInterrupt:
         print("\nInterrupted by user.\n")
-    # finally:
-    #     export_constants = input("Export constants to txt? (y/n): ")
-    #     if export_constants.lower() == 'y':
-    #         export_constants_to_txt()
