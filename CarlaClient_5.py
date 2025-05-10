@@ -54,15 +54,13 @@ print("\nPreparing Client...\n")
 
 THREADED = True
 
-# Image parameters
 SHOW_PREVIEW = False
 PRINT_ACTIONS = False
 PRINT_QS = False
-# IMG_WIDTH, IMG_HEIGHT = 640, 480
-IMG_WIDTH, IMG_HEIGHT = 320, 240
-
 
 FPS = 60
+
+IMG_WIDTH, IMG_HEIGHT = 640, 480
 
 # RL parameters
 EPISODE_LENGTH = 10 #seconds
