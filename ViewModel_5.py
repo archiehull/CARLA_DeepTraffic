@@ -10,7 +10,8 @@ import keras.backend.tensorflow_backend as backend
 from keras.models import load_model
 from CarlaClient_5 import CarEnvironment, MEMORY_FRACTION
 
-# cant leverage gpu on tensorflow without downgrading cuda version (not possible on my rtx3070)
+from keras.initializers import glorot_uniform
+from keras.utils.generic_utils import get_custom_objects
 
 MODEL_PATH = 'C:\\Temp\\models\\Xception___-27.00max_-113.50avg_-200.00min__1745582883.model'
 
