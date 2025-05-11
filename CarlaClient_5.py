@@ -49,13 +49,34 @@ import threading
 from threading import Thread
 
 from tqdm import tqdm
-# CONSTANTS
 
 print("\nPreparing Client...\n")
 
-THREADED = True
+# model_setup
+MODEL_NAME = "64x3"
+# MODEL_NAME = "Xception"
+
+IMG_WIDTH, IMG_HEIGHT = 640, 480
+# RL parameters
+EPISODES = 5000
+EPISODE_LENGTH = 10 #seconds
+LEARNING_RATE = 0.001
+REPLAY_MEMORY_SIZE = 5000
+MIN_REPLAY_SIZE = 1000
+MINIBATCH_SIZE = 16
+PREDICTION_BATCH_SIZE = 1
+TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
+UPDATE_TARGET_EVERY = 5
+# Epsilon
+DISCOUNT = 0.99
+epsilon = 1
+EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
+MIN_EPSILON = 0.1
+# Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [speed up, slow down, stay the same, left, right] 
+Q_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0] 
 
 # Debugging
+THREADED = True
 SHOW_PREVIEW = False
 PRINT_ACTIONS = False
 PRINT_NUM_ACTIONS = False
@@ -64,51 +85,19 @@ PRINT_TIMES = False
 PRINT_TRAINING = False
 PRINT_THREADS = False
 
-NUM_TRAINING_THREADS = 1 # number of threads to run in parallel
-
-IMG_WIDTH, IMG_HEIGHT = 640, 480
-# IMG_WIDTH, IMG_HEIGHT = 320, 240
-
-# RL parameters
-EPISODE_LENGTH = 10 #seconds
-
-LEARNING_RATE = 0.001
-REPLAY_MEMORY_SIZE = 5000
-MIN_REPLAY_SIZE = 1000
-MINIBATCH_SIZE = 16
-PREDICTION_BATCH_SIZE = 1
-TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
-UPDATE_TARGET_EVERY = 5
-
-# model_setup
-MODEL_NAME = "64x3"
-# MODEL_NAME = "Xception"
-
-MEMORY_FRACTION = 0.8 # allocates 80% of processing power to avoid overconsuption (test)
-MIN_REWARD = 0
-
-EPISODES = 5000
-
-DISCOUNT = 0.99
-epsilon = 1
-EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
-MIN_EPSILON = 0.1
-
-# Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [speed up, slow down, stay the same, left, right] 
-Q_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0] 
-
-
-AGGREGATE_STATS_EVERY = 10
-
+# Simulation parameters
 POPULATE_CARS = True # True: Cars on highway, False: spawn obstacles
-
-CARS_ON_HIGHWAY = 20 # number of cars on highway -20
-WAYPOINTS_PER_LANE = 16 # number of waypoints on highway -16
+AUTOPILOT = True # spawn cars with autopilot
+CARS_ON_HIGHWAY = 20 # cars on highway
+WAYPOINTS_PER_LANE = 16 # waypoints on highway
 WAYPOINT_SEPARATION = 7.0 # distance between waypoints
 
-AUTOPILOT = True # spawn cars with autopilot
+# GPU / Memory 
+MEMORY_FRACTION = 0.8 # GPU allocation (if using GPU)
+NUM_TRAINING_THREADS = 1 # number of threads to run in parallel
 
-# Own Tensorboard class
+MIN_REWARD = 20 # export model if stayed alive for 20% of the episode
+AGGREGATE_STATS_EVERY = 10 # tensorboard stats
 # run "tensorboard --logdir=logs/" in terminal to view tensorboard
 # http://localhost:6006/
 
@@ -684,12 +673,12 @@ class CarEnvironment:
         elif speed_kmh == 0: # TODO: check for non autopilot
             done = True
             reward = -1
-        elif speed_kmh < 50:
-            done = False
-            reward = -0.5  # Penalty for slow speed
         elif speed_kmh < 10:
             done = False
-            reward = -0.3
+            reward = -0.5
+        elif speed_kmh < 50:
+            done = False
+            reward = -0.3  # Penalty for slow speed
         else:
             done = False
             reward = 1  # Reward for maintaining good speed
@@ -702,7 +691,7 @@ class CarEnvironment:
 
     def __init__(self):
 
-        print("\nInitialising Environment...\n")
+        print("Initialising Environment...\n")
 
         self.client = carla.Client("localhost", 2000)
 
@@ -860,7 +849,7 @@ class DQNAgent:
             #     print(f"\nReplay memory size: {len(self.replay_memory)}")
             return
         
-        if THREADED or PRINT_THREADS:
+        if PRINT_THREADS:
             print(f"\nTraining running on thread: {threading.current_thread().name}")
 
         minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
@@ -1032,7 +1021,7 @@ if __name__ == "__main__":
                 for t in threading.enumerate():
                     print(f"Thread name: {t.name}, Alive: {t.is_alive()}")
 
-        print("Starting Training...\n")
+        print("\nStarting Training...\n")
         for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit="episodes"):
             env.collision_list = []
             agent.tensorboard.step = episode
