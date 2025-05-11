@@ -38,7 +38,7 @@ import cv2
 from collections import deque
 
 from keras.applications.xception import Xception 
-from keras.layers import Dense, GlobalAveragePooling2D, Conv2D, Flatten, AveragePooling2D
+from keras.layers import Dense, GlobalAveragePooling2D, Conv2D, Flatten, AveragePooling2D, Dropout, BatchNormalization
 from keras.optimizers import Adam
 from keras.models import Model, Sequential
 from keras.callbacks import TensorBoard
@@ -52,7 +52,8 @@ from tqdm import tqdm
 print("\nPreparing Client...\n")
 
 # model_setup
-MODEL_NAME = "64x3"
+MODEL_NAME = "CNN1"
+# MODEL_NAME = "64x3"
 # MODEL_NAME = "Xception"
 
 IMG_WIDTH, IMG_HEIGHT = 640, 480
@@ -71,7 +72,8 @@ DISCOUNT = 0.99
 epsilon = 1
 EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
 MIN_EPSILON = 0.1
-# Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [speed up, slow down, stay the same, left, right] 
+# Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [left, right, speed up, stay the same, slow down] 
+ACTION_NAMES = ["left", "right", "speed up", "stay the same", "slow down"]
 Q_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0] 
 
 # Debugging
@@ -101,7 +103,7 @@ AGGREGATE_STATS_EVERY = 10 # tensorboard stats
 # http://localhost:6006/
 
 def export_constants_to_txt():
-    filename = f"models/{MODEL_NAME}_{int(time.time())}.txt"
+    filename = f"models/Constants_{MODEL_NAME}_{int(time.time)}.txt"
 
     constants = {
         "MODEL_NAME": MODEL_NAME,
@@ -682,6 +684,8 @@ class CarEnvironment:
             done = False
             reward = 1  # Reward for maintaining good speed
 
+        reward += 0.1 # Reward for survival
+
         # End simulation after EPISODE_LENGTH
         if self.episode_start + EPISODE_LENGTH < time.time():
             done = True
@@ -786,6 +790,22 @@ class DQNAgent:
         # Compile the model
         model.compile(loss="mse", optimizer=Adam(lr=LEARNING_RATE), metrics=["accuracy"])
 
+        return model
+
+    def cnn_1(self):
+        model = Sequential([
+            Conv2D(32, (8, 8), strides=(4, 4), activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
+            BatchNormalization(),
+            Conv2D(64, (4, 4), strides=(2, 2), activation='relu'),
+            BatchNormalization(),
+            Conv2D(64, (3, 3), strides=(1, 1), activation='relu'),
+            BatchNormalization(),
+            Flatten(),
+            Dense(512, activation='relu'),
+            Dropout(0.2),
+            Dense(5, activation='linear')
+        ])
+        model.compile(loss="mse", optimizer=Adam(lr=LEARNING_RATE), metrics=["accuracy"])
         return model
 
     def create_model_dt(self):# DeepTraffic
@@ -946,7 +966,10 @@ class DQNAgent:
         elif MODEL_NAME == "Xception":
             self.model = self.create_model_x() # create model
             self.target_model = self.create_model_x() # create target model
-        
+
+        elif MODEL_NAME == "CNN1":
+            self.model = self.cnn_1()
+            self.target_model = self.cnn_1()
         else:
             print(f"Model \"{MODEL_NAME}\" not found")
             exit()
@@ -1021,6 +1044,7 @@ if __name__ == "__main__":
                     print(f"Thread name: {t.name}, Alive: {t.is_alive()}")
 
         print("\nStarting Training...\n")
+        q_values_log = []
         for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit="episodes"):
             env.collision_list = []
             agent.tensorboard.step = episode
@@ -1099,24 +1123,28 @@ if __name__ == "__main__":
                 average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-                agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon, episode_time=episode_time, actions_per_second=action_count/episode_time)
+                agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon, episode_time=episode_time, actions_per_second=(action_count/episode_time))
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
-                    agent.model.save(f'models/W_{MODEL_NAME}_E{episode}_{(total_actions/total_time):_>7.2f}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                    agent.model.save(f'models/W_{MODEL_NAME}_E{episode}_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
 
             # Decay epsilon
             if epsilon > MIN_EPSILON:
                 epsilon *= EPSILON_DECAY
                 epsilon = max(MIN_EPSILON, epsilon)
 
-            if episode % 1000 == 0 or episode == 500 or episode == 250 or episode == 100 or episode == 1:
-                agent.model.save(f'models/{MODEL_NAME}_E{episode}_{(total_actions/total_time):_>7.2f}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+            if episode % 1000 == 0 or episode == 500 or episode == 250 or episode == 100:
+                agent.model.save(f'models/{MODEL_NAME}_E{episode}_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
                 # view model performance by running "tensorboard --logdir=logs" in the command line
 
             if episode == 500:
                 export_constants_to_txt()
-                
+            
+            if episode % 100 == 0 or episode == 1:
+                current_qs = agent.get_qs(current_state)
+                q_values_log.append((episode, list(zip(ACTION_NAMES, current_qs.tolist()))))
+
             if PRINT_NUM_ACTIONS:
                 print(f"\nNumber of actions per second: {action_count/episode_time:.2f} actions/s")
         # Set termination flag for training thread and wait for it to finish
@@ -1131,3 +1159,8 @@ if __name__ == "__main__":
             agent.terminate = True
             for trainer_thread in agent.training_threads:
                 trainer_thread.join()
+        if q_values_log:
+            with open(f"models/q_values_log_{MODEL_NAME}_{int(time.time)}.txt", "w") as f:
+                for episode, qs_action_pairs in q_values_log:
+                    qs_str = ", ".join([f"{name}: {value:.4f}" for name, value in qs_action_pairs])
+                    f.write(f"Episode {episode}: [{qs_str}]\n")
