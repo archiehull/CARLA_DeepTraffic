@@ -36,12 +36,11 @@ import time
 import numpy as np
 import cv2
 from collections import deque
-from tensorflow import keras
 
 from keras.applications.xception import Xception 
-from keras.layers import Dense, GlobalAveragePooling2D
+from keras.layers import Dense, GlobalAveragePooling2D, Conv2D, Flatten, AveragePooling2D
 from keras.optimizers import Adam
-from keras.models import Model
+from keras.models import Model, Sequential
 from keras.callbacks import TensorBoard
 import keras.backend.tensorflow_backend as backend   # Must use older version of Tensorflow
 
@@ -769,23 +768,23 @@ class DQNAgent:
         return model
 
     def create_model_64(self):
-        model = keras.Sequential([
-            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
-            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+        model = Sequential([
+            Conv2D(64, (3, 3), padding='same', activation='relu', input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)),
+            AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
 
-            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
-            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+            Conv2D(64, (3, 3), padding='same', activation='relu'),
+            AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
 
-            keras.layers.Conv2D(64, (3, 3), padding='same', activation='relu'),
-            keras.layers.AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
+            Conv2D(64, (3, 3), padding='same', activation='relu'),
+            AveragePooling2D(pool_size=(5, 5), strides=(3, 3), padding='same'),
 
-            keras.layers.Flatten(),
-            keras.layers.Dense(512, activation='relu'),
-            keras.layers.Dense(5, activation='linear')  # Output layer for 5 actions
+            Flatten(),
+            Dense(512, activation='relu'),
+            Dense(5, activation='linear')  # Output layer for 5 actions
         ])
 
         # Compile the model
-        model.compile(loss="mse", optimizer=keras.optimizers.Adam(lr=LEARNING_RATE), metrics=["accuracy"])
+        model.compile(loss="mse", optimizer=Adam(lr=LEARNING_RATE), metrics=["accuracy"])
 
         return model
 
@@ -1104,15 +1103,15 @@ if __name__ == "__main__":
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
-                    agent.model.save(f'models/W_{MODEL_NAME}_{episode}_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                    agent.model.save(f'models/W_{MODEL_NAME}_E{episode}_{(total_actions/total_time):_>7.2f}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
 
             # Decay epsilon
             if epsilon > MIN_EPSILON:
                 epsilon *= EPSILON_DECAY
                 epsilon = max(MIN_EPSILON, epsilon)
 
-            if episode % 1000 == 0 or episode == 500 or episode == 250:
-                agent.model.save(f'models/{MODEL_NAME}_E{episode}_{total_actions/total_time}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+            if episode % 1000 == 0 or episode == 500 or episode == 250 or episode == 100 or episode == 1:
+                agent.model.save(f'models/{MODEL_NAME}_E{episode}_{(total_actions/total_time):_>7.2f}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
                 # view model performance by running "tensorboard --logdir=logs" in the command line
 
             if episode == 500:

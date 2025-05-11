@@ -905,7 +905,8 @@ if __name__ == "__main__":
         agent.terminate = True
         trainer_thread.join()
 
-        if episode % 1000 == 0 or episode == 500 or episode == 100:
+        if episode % 1000 == 0 or episode == 500 or episode == 100 or episode == 5:
+            print("exporting")
             agent.model.save(f'models/{MODEL_NAME}_E{episode}_{(total_actions/total_time):_>7.2f}ApS_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
             
             # view model performance by running "tensorboard --logdir=logs" in the command line
