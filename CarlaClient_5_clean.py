@@ -847,11 +847,11 @@ if __name__ == "__main__":
 
         # choose action
         while True:
-            if np.random.random() < epsilon:
+            if np.random.random() > epsilon:
                 action = np.argmax(agent.get_qs(current_state))
             else:
                 action = np.random.randint(0, 5) # random action action_num
-                # time.sleep(1/FPS)
+                time.sleep(0.05) # wait for random action to be taken
 
             new_state, reward, done, _ = env.step(action)
             episode_reward += reward

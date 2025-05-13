@@ -52,14 +52,14 @@ from tqdm import tqdm
 print("\nPreparing Client...\n")
 
 # model_setup
-MODEL_NAME = "CNN1"
-# MODEL_NAME = "64x3"
+# MODEL_NAME = "CNN1"
+MODEL_NAME = "64x3"
 # MODEL_NAME = "Xception"
 # MODEL_NAME = "DeepTraffic"
 
 IMG_WIDTH, IMG_HEIGHT = 640, 480
 # RL parameters
-EPISODES = 5000
+EPISODES = 1500
 EPISODE_LENGTH = 10 #seconds
 LEARNING_RATE = 0.001
 REPLAY_MEMORY_SIZE = 5000
@@ -643,7 +643,7 @@ class CarEnvironment:
         elif action == 3:  # Stay the same
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
         elif action == 4:  # Slow down
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.5))
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.3, brake=0.1))
 
 
 
@@ -1046,8 +1046,7 @@ if __name__ == "__main__":
             total_actions = 0
             total_time = 0      
 
-            previous_qs = None          
-
+            previous_qs = 0.0          
             # choose action
             while True:
                 if np.random.random() > epsilon:
@@ -1070,7 +1069,6 @@ if __name__ == "__main__":
                             print(f"Previous: {previous_qs}")
                             print(f"Current:  {current_qs}")
                             print(f"Difference: {current_qs - previous_qs}")
-                            previous_qs = current_qs
                     if PRINT_QS:
                         print(f"\nQ-values: {agent.get_qs(current_state)}")
                 else:
@@ -1106,7 +1104,7 @@ if __name__ == "__main__":
 
                 if done:
                     break
-            
+
             episode_time = time.time() - episode_start_time
             total_actions += action_count
             total_time += episode_time
@@ -1134,12 +1132,14 @@ if __name__ == "__main__":
                     epsilon=epsilon,
                     episode_time=episode_time,
                     actions_per_second=(action_count / episode_time),
+                    q_difference=np.sum(np.abs(current_qs - previous_qs)),
                     q_left=current_qs[0],
                     q_right=current_qs[1],
                     q_speed_up=current_qs[2],
                     q_stay=current_qs[3],
                     q_slow_down=current_qs[4]
                 )
+                previous_qs = current_qs
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
