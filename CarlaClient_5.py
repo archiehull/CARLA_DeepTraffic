@@ -72,7 +72,7 @@ UPDATE_TARGET_EVERY = 5
 DISCOUNT = 0.99
 epsilon = 1
 EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
-MIN_EPSILON = 0.25
+MIN_EPSILON = 0.05
 
 # Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [left, right, speed up, stay the same, slow down] 
 ACTION_NAMES = ["left", "right", "speed up", "stay the same", "slow down"]
@@ -820,20 +820,20 @@ class DQNAgent:
         # transition = (current_state, action, reward, new_state, done)
         self.replay_memory.append(transition)
 
-    def get_qs(self, state): # can cause silent exit on first call
+    def get_qs(self, state):
         try:
-            if THREADED and ((NUM_TRAINING_THREADS > 1)or MODEL_NAME == "Xception"):
+            if THREADED: # can cause race condition on some models
                 with self.tf_lock:
                     with self.graph.as_default():
                         with self.session.as_default():
                             qs= self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
             else:
                 qs = self.model.predict(np.array(state).reshape(-1, IMG_HEIGHT, IMG_WIDTH, 3) / 255)[0]
+            qs *= Q_WEIGHTS
         except Exception as e:
             print(f"Error in agent.get_qs(): {e}")
         # add weights to values action_
-
-        qs *= Q_WEIGHTS
+        
         return qs
         
     def train_in_loop(self):
@@ -1050,7 +1050,7 @@ if __name__ == "__main__":
 
             # choose action
             while True:
-                if np.random.random() < epsilon:
+                if np.random.random() > epsilon:
                     if PRINT_TIMES:
                         start_pred = time.time()
                         action = np.argmax(agent.get_qs(current_state))
@@ -1058,10 +1058,8 @@ if __name__ == "__main__":
                         print(f"\nPrediction time: {end_pred - start_pred:.2f}s")
                     else:
                         action = np.argmax(agent.get_qs(current_state))
-                    if PRINT_QS_DIFF:
-                        # Get current Q-values
-                        current_qs = agent.get_qs(current_state)
-                        
+                    current_qs = agent.get_qs(current_state)
+                    if PRINT_QS_DIFF:                       
                         # Initialize previous_qs if not already done
                         if previous_qs is None:
                             previous_qs = current_qs
@@ -1125,11 +1123,23 @@ if __name__ == "__main__":
 
             # Append episode reward to a list and log stats (every given number of episodes)
             ep_rewards.append(episode_reward)
-            if not episode % AGGREGATE_STATS_EVERY or episode == 1:
+            if not episode % AGGREGATE_STATS_EVERY:
                 average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
                 max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-                agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon, episode_time=episode_time, actions_per_second=(action_count/episode_time))
+                agent.tensorboard.update_stats(
+                    reward_avg=average_reward,
+                    reward_min=min_reward,
+                    reward_max=max_reward,
+                    epsilon=epsilon,
+                    episode_time=episode_time,
+                    actions_per_second=(action_count / episode_time),
+                    q_left=current_qs[0],
+                    q_right=current_qs[1],
+                    q_speed_up=current_qs[2],
+                    q_stay=current_qs[3],
+                    q_slow_down=current_qs[4]
+                )
 
                 # Save model, but only when min reward is greater or equal a set value
                 if min_reward >= MIN_REWARD:
@@ -1149,7 +1159,7 @@ if __name__ == "__main__":
             
             if episode % 25 == 0 or episode == 1:
                 current_qs = agent.get_qs(current_state)
-                q_values_log.append((episode, list(zip(ACTION_NAMES, current_qs.tolist()))))
+                q_values_log.append((episode, sum(ep_rewards[-25:])/len(ep_rewards[-25:]), list(zip(ACTION_NAMES, current_qs.tolist()))))
 
             if PRINT_NUM_ACTIONS:
                 print(f"\nNumber of actions per second: {action_count/episode_time:.2f} actions/s")
@@ -1167,6 +1177,6 @@ if __name__ == "__main__":
                 trainer_thread.join()
         if q_values_log:
             with open(f"models/q_values_log_{MODEL_NAME}_{int(time.time())}.txt", "w") as f:
-                for episode, qs_action_pairs in q_values_log:
+                for episode, avg_reward, qs_action_pairs in q_values_log:
                     qs_str = "| ".join([f"{name}: {value:.4f}" for name, value in qs_action_pairs])
-                    f.write(f"Episode {episode}, Avg Reward{sum(ep_rewards[-100:])/len(ep_rewards[-100:])} [{qs_str}]\n")
+                    f.write(f"Episode {episode}, Avg Reward{avg_reward:_>7.2f} [{qs_str}]\n")

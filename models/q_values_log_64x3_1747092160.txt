@@ -1,1 +1,0 @@
-Episode 1, Avg Reward-84.21052631578948 [left: 0.0339| right: 0.0882| speed up: 0.0220| stay the same: -0.0208| slow down: -0.0740]

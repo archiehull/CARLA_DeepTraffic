@@ -1,3 +1,0 @@
-Episode 1, Avg Reward-83.38461538461539 [left: 0.0000| right: 0.0001| speed up: 0.0000| stay the same: 0.0000| slow down: -0.0000]
-Episode 25, Avg Reward-83.38461538461539 [left: 0.0000| right: 0.0001| speed up: 0.0000| stay the same: 0.0000| slow down: -0.0000]
-Episode 50, Avg Reward-83.38461538461539 [left: 0.0000| right: 0.0001| speed up: 0.0000| stay the same: 0.0000| slow down: -0.0000]
