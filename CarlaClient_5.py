@@ -55,6 +55,7 @@ print("\nPreparing Client...\n")
 MODEL_NAME = "CNN1"
 # MODEL_NAME = "64x3"
 # MODEL_NAME = "Xception"
+# MODEL_NAME = "DeepTraffic"
 
 IMG_WIDTH, IMG_HEIGHT = 640, 480
 # RL parameters
@@ -71,7 +72,8 @@ UPDATE_TARGET_EVERY = 5
 DISCOUNT = 0.99
 epsilon = 1
 EPSILON_DECAY = 0.995 ## tend towards 1.0 depeninding on # of steps
-MIN_EPSILON = 0.1
+MIN_EPSILON = 0.25
+
 # Q_WEIGHTS = [1.0, 0.8, 0.9, 0.6, 0.6] # [left, right, speed up, stay the same, slow down] 
 ACTION_NAMES = ["left", "right", "speed up", "stay the same", "slow down"]
 Q_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0] 
@@ -81,10 +83,12 @@ THREADED = True
 SHOW_PREVIEW = False
 PRINT_ACTIONS = False
 PRINT_NUM_ACTIONS = False
+PRINT_QS_DIFF = False
 PRINT_QS = False
 PRINT_TIMES = False
 PRINT_TRAINING = False
 PRINT_THREADS = False
+PRINT_REWARD = False
 
 # Simulation parameters
 POPULATE_CARS = True # True: Cars on highway, False: spawn obstacles
@@ -97,13 +101,13 @@ WAYPOINT_SEPARATION = 7.0 # distance between waypoints
 MEMORY_FRACTION = 0.8 # GPU allocation (if using GPU)
 NUM_TRAINING_THREADS = 1 # number of threads to run in parallel
 
-MIN_REWARD = 20 # export model if stayed alive for 20% of the episode
+MIN_REWARD = 10 
 AGGREGATE_STATS_EVERY = 10 # tensorboard stats
 # run "tensorboard --logdir=logs/" in terminal to view tensorboard
 # http://localhost:6006/
 
 def export_constants_to_txt():
-    filename = f"models/Constants_{MODEL_NAME}_{int(time.time)}.txt"
+    filename = f"models/Constants_{MODEL_NAME}_{int(time.time())}.txt"
 
     constants = {
         "MODEL_NAME": MODEL_NAME,
@@ -571,7 +575,7 @@ class CarEnvironment:
 
         # send vehicle control to improve agent response time
         if AUTOPILOT:
-            self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, brake=0.0)) # match speed of other cars
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.9, brake=0.0)) # match speed of other cars
         else:
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.2, brake=0.0))
 
@@ -594,7 +598,7 @@ class CarEnvironment:
 
         # send vehicle control to improve agent response time
         if AUTOPILOT:
-            self.vehicle.apply_control(carla.VehicleControl(throttle=2.0, brake=0.0)) # match speed of other cars
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.9, brake=0.0)) # match speed of other cars
         else:
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.2, brake=0.0))
 
@@ -625,33 +629,15 @@ class CarEnvironment:
             # Update the previous action
             self.previous_action = action
 
-        if PRINT_QS:
-            # Get current Q-values
-            current_qs = agent.get_qs(self.front_camera)
-            
-            # Initialize previous_qs if not already done
-            if not hasattr(self, 'previous_qs'):
-                self.previous_qs = current_qs
-                print(f"\nInitial Q-values: {current_qs}")
-            # Check if Q-values have changed
-            elif not np.array_equal(current_qs, self.previous_qs):
-                print(f"\nQ-values changed:")
-                print(f"Previous: {self.previous_qs}")
-                print(f"Current:  {current_qs}")
-                print(f"Difference: {current_qs - self.previous_qs}")
-                self.previous_qs = current_qs
-
         # change action numbers to match first input
         if action == 0:  # Change to the left lane
             next_waypoint = current_waypoint.get_left_lane()
             if next_waypoint:
                 self.vehicle.set_transform(next_waypoint.transform)
-
         elif action == 1:  # Change to the right lane
             next_waypoint = current_waypoint.get_right_lane()
             if next_waypoint:
                 self.vehicle.set_transform(next_waypoint.transform)
-
         elif action == 2:  # Speed up
             self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
         elif action == 3:  # Stay the same
@@ -667,24 +653,28 @@ class CarEnvironment:
         # Reward logic
         if len(self.collision_list) != 0:
             done = True
-            reward = -1  # Penalty for collision
+            reward = -100 # Penalty for collision
         elif next_waypoint is not None and (next_waypoint.lane_id == -5 or next_waypoint.lane_id == 1): # Check if the vehicle is off the road
             done = True
-            reward = -1
+            reward = -75
         elif speed_kmh == 0: # TODO: check for non autopilot
             done = True
-            reward = -1
+            reward = -10
         elif speed_kmh < 10:
             done = False
-            reward = -0.5
-        elif speed_kmh < 50:
+            reward = -5
+        elif speed_kmh < 30:
             done = False
-            reward = -0.3  # Penalty for slow speed
-        else:
+            reward = -1 
+        elif speed_kmh > 30 and speed_kmh < 50:
             done = False
             reward = 1  # Reward for maintaining good speed
-
-        reward += 0.1 # Reward for survival
+        elif speed_kmh > 50 and speed_kmh < 70:
+            done = False
+            reward = 2
+        else:
+            done = False
+            reward = 0
 
         # End simulation after EPISODE_LENGTH
         if self.episode_start + EPISODE_LENGTH < time.time():
@@ -808,29 +798,22 @@ class DQNAgent:
         model.compile(loss="mse", optimizer=Adam(lr=LEARNING_RATE), metrics=["accuracy"])
         return model
 
-    def create_model_dt(self):# DeepTraffic
-        model = tf.keras.Sequential()
-        model.add(tf.keras.layers.Input(shape=(IMG_HEIGHT, IMG_WIDTH,3)))  # Input layer
-
-        # Fully connected layers with 'tanh' activation
-        model.add(tf.keras.layers.Dense(36, activation='tanh'))
-        model.add(tf.keras.layers.Dense(24, activation='tanh'))
-        model.add(tf.keras.layers.Dense(24, activation='tanh'))
-        model.add(tf.keras.layers.Dense(24, activation='tanh'))
-
-        # Output layer with linear activation for regression
-        model.add(tf.keras.layers.Dense(3, activation='linear'))
-
-        predictions = tf.keras.layers.Dense(3, activation='linear')(model.output)
-        model = Model(inputs=model.input, outputs=predictions)
-
-        # Compile the model
+    def create_model_dt(self):  # DeepTraffic
+        # Parilo on Github https://github.com/parilo/DeepTraffic-solution/blob/master/solution.js
+        model = Sequential([
+            # Input layer
+            Flatten(input_shape=(IMG_HEIGHT, IMG_WIDTH, 3)), # flatten image to array
+            Dense(36, activation='tanh'),
+            Dense(24, activation='tanh'),
+            Dense(24, activation='tanh'),
+            Dense(24, activation='tanh'),
+            Dense(5, activation='linear')
+        ])
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-            loss='mse',
-            metrics=['accuracy']
+            loss="mse",
+            optimizer=Adam(lr=LEARNING_RATE),
+            metrics=["accuracy"]
         )
-
         return model
 
     def update_replay_memory(self, transition):
@@ -839,7 +822,7 @@ class DQNAgent:
 
     def get_qs(self, state): # can cause silent exit on first call
         try:
-            if THREADED and NUM_TRAINING_THREADS > 1:
+            if THREADED and ((NUM_TRAINING_THREADS > 1)or MODEL_NAME == "Xception"):
                 with self.tf_lock:
                     with self.graph.as_default():
                         with self.session.as_default():
@@ -921,7 +904,7 @@ class DQNAgent:
             self.last_logged_episode = self.tensorboard.step
 
         start_fit = time.time()
-        if THREADED and NUM_TRAINING_THREADS > 1:
+        if THREADED and ((NUM_TRAINING_THREADS > 1) or MODEL_NAME == "Xception"):
             with self.tf_lock:
                 with self.graph.as_default():
                     with self.session.as_default():
@@ -970,6 +953,10 @@ class DQNAgent:
         elif MODEL_NAME == "CNN1":
             self.model = self.cnn_1()
             self.target_model = self.cnn_1()
+
+        elif MODEL_NAME == "DeepTraffic":
+            self.model = self.create_model_dt()
+            self.target_model = self.create_model_dt()  
         else:
             print(f"Model \"{MODEL_NAME}\" not found")
             exit()
@@ -1038,10 +1025,10 @@ if __name__ == "__main__":
             while not agent.training_initialised:
                 time.sleep(0.01)
 
-            if PRINT_THREADS:
-                print("\nActive threads after starting trainer_thread:")
-                for t in threading.enumerate():
-                    print(f"Thread name: {t.name}, Alive: {t.is_alive()}")
+        if PRINT_THREADS:
+            print("\nActive threads on initialisation:")
+            for t in threading.enumerate():
+                print(f"Thread name: {t.name}, Alive: {t.is_alive()}")
 
         print("\nStarting Training...\n")
         q_values_log = []
@@ -1057,7 +1044,9 @@ if __name__ == "__main__":
             action_count = 0  
 
             total_actions = 0
-            total_time = 0                
+            total_time = 0      
+
+            previous_qs = None          
 
             # choose action
             while True:
@@ -1069,6 +1058,23 @@ if __name__ == "__main__":
                         print(f"\nPrediction time: {end_pred - start_pred:.2f}s")
                     else:
                         action = np.argmax(agent.get_qs(current_state))
+                    if PRINT_QS_DIFF:
+                        # Get current Q-values
+                        current_qs = agent.get_qs(current_state)
+                        
+                        # Initialize previous_qs if not already done
+                        if previous_qs is None:
+                            previous_qs = current_qs
+                            print(f"\nInitial Q-values: {current_qs}")
+                        # Check if Q-values have changed
+                        elif not np.array_equal(current_qs, previous_qs):
+                            print(f"\nQ-values changed:")
+                            print(f"Previous: {previous_qs}")
+                            print(f"Current:  {current_qs}")
+                            print(f"Difference: {current_qs - previous_qs}")
+                            previous_qs = current_qs
+                    if PRINT_QS:
+                        print(f"\nQ-values: {agent.get_qs(current_state)}")
                 else:
                     action = np.random.randint(0, 5) # random action action_num
                     time.sleep(0.01) # wait for random action to be chosen
@@ -1078,11 +1084,11 @@ if __name__ == "__main__":
                 new_state, reward, done, _ = env.step(action)
                 episode_reward += reward
 
+                if PRINT_REWARD and reward != 0:
+                    print(f"\nEpisode: {episode}, Step: {step}, Action: {action}, Reward: {reward:.2f}, Epsilon: {epsilon:.2f}, Total Episode Reward: {episode_reward:.2f}")
+                
                 if PRINT_TIMES:
-                    update_time = time.time()
                     agent.update_replay_memory((current_state, action, reward, new_state, done))
-                    end_update = time.time()
-                    print(f"\nUpdate time: {end_update - update_time:.2f}s")
                 else:
                     agent.update_replay_memory((current_state, action, reward, new_state, done))
                 current_state = new_state  # Update state for next decision
@@ -1134,14 +1140,14 @@ if __name__ == "__main__":
                 epsilon *= EPSILON_DECAY
                 epsilon = max(MIN_EPSILON, epsilon)
 
-            if episode % 1000 == 0 or episode == 500 or episode == 250 or episode == 100:
+            if episode % 250 == 0 or episode == 100:
                 agent.model.save(f'models/{MODEL_NAME}_E{episode}_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
                 # view model performance by running "tensorboard --logdir=logs" in the command line
 
             if episode == 500:
                 export_constants_to_txt()
             
-            if episode % 100 == 0 or episode == 1:
+            if episode % 25 == 0 or episode == 1:
                 current_qs = agent.get_qs(current_state)
                 q_values_log.append((episode, list(zip(ACTION_NAMES, current_qs.tolist()))))
 
@@ -1160,7 +1166,7 @@ if __name__ == "__main__":
             for trainer_thread in agent.training_threads:
                 trainer_thread.join()
         if q_values_log:
-            with open(f"models/q_values_log_{MODEL_NAME}_{int(time.time)}.txt", "w") as f:
+            with open(f"models/q_values_log_{MODEL_NAME}_{int(time.time())}.txt", "w") as f:
                 for episode, qs_action_pairs in q_values_log:
-                    qs_str = ", ".join([f"{name}: {value:.4f}" for name, value in qs_action_pairs])
-                    f.write(f"Episode {episode}: [{qs_str}]\n")
+                    qs_str = "| ".join([f"{name}: {value:.4f}" for name, value in qs_action_pairs])
+                    f.write(f"Episode {episode}, Avg Reward{sum(ep_rewards[-100:])/len(ep_rewards[-100:])} [{qs_str}]\n")
