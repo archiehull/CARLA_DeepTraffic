@@ -59,7 +59,7 @@ MODEL_NAME = "64x3"
 
 IMG_WIDTH, IMG_HEIGHT = 640, 480
 # RL parameters
-EPISODES = 1500
+EPISODES = 20000
 EPISODE_LENGTH = 10 #seconds
 LEARNING_RATE = 0.001
 REPLAY_MEMORY_SIZE = 5000
@@ -643,7 +643,7 @@ class CarEnvironment:
         elif action == 3:  # Stay the same
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
         elif action == 4:  # Slow down
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.3, brake=0.1))
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.3, brake=0.2))
 
 
 
@@ -668,10 +668,10 @@ class CarEnvironment:
             reward = -1 
         elif speed_kmh > 30 and speed_kmh < 50:
             done = False
-            reward = 1  # Reward for maintaining good speed
+            reward = 2  # Reward for maintaining good speed
         elif speed_kmh > 50 and speed_kmh < 70:
             done = False
-            reward = 2
+            reward = 5
         else:
             done = False
             reward = 0
@@ -1150,7 +1150,7 @@ if __name__ == "__main__":
                 epsilon *= EPSILON_DECAY
                 epsilon = max(MIN_EPSILON, epsilon)
 
-            if episode % 250 == 0 or episode == 100:
+            if episode % 500 == 0 or episode == 100 or episode == 250:
                 agent.model.save(f'models/{MODEL_NAME}_E{episode}_{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
                 # view model performance by running "tensorboard --logdir=logs" in the command line
 
