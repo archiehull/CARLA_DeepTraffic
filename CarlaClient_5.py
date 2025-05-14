@@ -643,7 +643,7 @@ class CarEnvironment:
         elif action == 3:  # Stay the same
             self.vehicle.apply_control(carla.VehicleControl(throttle=0.7, steer=0))
         elif action == 4:  # Slow down
-            self.vehicle.apply_control(carla.VehicleControl(throttle=0.3, brake=0.2))
+            self.vehicle.apply_control(carla.VehicleControl(throttle=0.5, brake=0.1))
 
 
 

@@ -1,14 +1,8 @@
 import sys
 import glob
 import os
-
-# Add CARLA PythonAPI and agents module to the Python path
-sys.path.append(r"C:\Temp\CARLA_0.9.13\WindowsNoEditor\PythonAPI\carla")
-sys.path.append(r"C:\Temp\CARLA_0.9.13\WindowsNoEditor\PythonAPI")
-
 import carla
 import time
-from agents.navigation.controller import VehiclePIDController
 import math
 import random
 import numpy as np
@@ -19,10 +13,10 @@ CARS_ON_HIGHWAY = 10 # number of cars on highway
 WAYPOINTS_PER_LANE = 8 # number of waypoints on highway
 WAYPOINT_SEPARATION = 10.0 # distance between waypoints
 
-WAYPOINT_INDICATORS = False
+WAYPOINT_INDICATORS = True
 POPULATE_HIGHWAY = True
 CHANGE_LANE = False
-RANDOM_OLD = False
+RANDOM_OLD = True
 
 def generate_lane_waypoints(world, num_waypoints=WAYPOINTS_PER_LANE, separation=WAYPOINT_SEPARATION):
     spawn_points = world.get_map().get_spawn_points()
@@ -294,8 +288,6 @@ def change_lane(vehicle, world, direction):
     else:
         print("Invalid direction. Use 'l' for left or 'r' for right.")
 
-
-
 def main():
     vehicle = None  # Initialize the vehicle reference
     try:
@@ -326,7 +318,7 @@ def main():
         actor = world.try_spawn_actor(vehicle_bp, transform)
 
         waypoints = generate_lane_waypoints_infront(world)
-        print(f"Spawned {len(waypoints)} waypoint indicators ahead of the vehicle.")
+        # print(f"Spawned {len(waypoints)} waypoint indicators ahead of the vehicle.")
         
         if WAYPOINT_INDICATORS:
             spawn_waypoint_indicators(world, waypoints, actor_list)
@@ -410,7 +402,6 @@ def main():
                 actor.destroy()
             print("Vehicle destroyed.")
 
-
 def set_spectator(world, fixed_location):
 
     # Calculate the spectator's position behind and above the fixed location
@@ -455,7 +446,6 @@ def spawn_vehicle_ahead(world, spawn_point):
     else:
         print(f"Failed to spawn vehicle at location: {spawn_point.location}")
         return None
-
 
 if __name__ == "__main__":
     main()

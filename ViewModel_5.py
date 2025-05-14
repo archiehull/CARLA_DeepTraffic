@@ -46,7 +46,7 @@ if __name__ == '__main__':
         print(f"Error during model initialization: {e}")
         exit()
 
-    
+    show_input = input("Do you want to show the input image? (y/n): ").strip().lower()
     # Loop over episodes
     while True:
 
@@ -65,8 +65,9 @@ if __name__ == '__main__':
             step_start = time.time()
 
             # Show current frame
-            # cv2.imshow(f'Agent - preview', current_state)
-            # cv2.waitKey(1)
+            if show_input == 'y':
+                cv2.imshow(f'Agent - preview', current_state)
+                cv2.waitKey(1)
 
             # Predict an action based on current observation space
             qs = model.predict(np.array(current_state).reshape(-1, *current_state.shape)/255)[0]
@@ -88,7 +89,7 @@ if __name__ == '__main__':
             # Measure step time, append to a deque, then print mean FPS for last 60 frames, q values and taken action
             frame_time = time.time() - step_start
             fps_counter.append(frame_time)
-            print(f'Agent: {len(fps_counter)/sum(fps_counter):>4.1f} FPS | Action:{action} | Reward:{reward}|'f'Qs: [L:{qs[0]:>5.2f}, R:{qs[1]:>5.2f}, U:{qs[2]:>5.2f}, S:{qs[3]:>5.2f}, D:{qs[4]:>5.2f}] ')
+            print(f'Agent: {len(fps_counter)/sum(fps_counter):>4.1f} FPS | Action:{action} | Reward:{reward} |'f'Qs: [L:{qs[0]:>5.2f}, R:{qs[1]:>5.2f}, U:{qs[2]:>5.2f}, S:{qs[3]:>5.2f}, D:{qs[4]:>5.2f}] ')
 
         # Destroy an actor at end of episode
         for actor in env.actor_list:
