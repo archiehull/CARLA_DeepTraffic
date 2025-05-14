@@ -83,3 +83,8 @@ if __name__ == '__main__':
         # Destroy an actor at end of episode
         for actor in env.actor_list:
             actor.destroy()
+
+# References:
+# 
+# Kinsley, Harrison (2019) Reinforcement Learning in Action - Self-driving cars with Carla and Python
+# https://pythonprogramming.net/reinforcement-learning-self-driving-autonomous-cars-carla-python/ [Accessed 14 May 2025]

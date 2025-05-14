@@ -1180,3 +1180,8 @@ if __name__ == "__main__":
                 for episode, avg_reward, qs_action_pairs in q_values_log:
                     qs_str = "| ".join([f"{name}: {value:.4f}" for name, value in qs_action_pairs])
                     f.write(f"Episode {episode}, Avg Reward{avg_reward:_>7.2f} [{qs_str}]\n")
+
+# References:
+# 
+# Kinsley, Harrison (2019) Reinforcement Learning in Action - Self-driving cars with Carla and Python
+# https://pythonprogramming.net/reinforcement-learning-self-driving-autonomous-cars-carla-python/ [Accessed 14 May 2025]
