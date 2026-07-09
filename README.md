@@ -183,3 +183,110 @@ Then open: `http://localhost:6006`
   https://pythonprogramming.net/reinforcement-learning-self-driving-autonomous-cars-carla-python/
 - CARLA simulator:
   https://carla.org/
+
+---
+
+# Report + Key Findings
+
+This project investigated Deep Q-Network (DQN) training for autonomous highway navigation in CARLA using image-based observations and a discrete action space consisting of:
+
+- Lane Left
+- Lane Right
+- Accelerate
+- Brake
+- Maintain Speed
+
+## What Worked
+
+- Built a complete CARLA training pipeline including experience replay, target network updates, epsilon-greedy exploration, modular reward shaping, and model checkpointing.
+- Successfully configured a multi-lane highway scenario in Town04 with dynamic traffic.
+- Implemented multiple CNN backbones and made architecture swapping straightforward for experimentation.
+
+## Main Technical Outcome
+
+The **64x3 CNN** architecture proved to be the most stable under CPU-only constraints.
+
+Compared with the Xception and CNN1 architectures, it demonstrated:
+
+- Better stability in reward trends
+- More bounded Q-values
+- Lower volatility during training
+
+## Core Limitation
+
+Real-time training and inference were not achieved due to TensorFlow/CUDA/Windows compatibility issues, which forced CPU-only execution.
+
+This significantly reduced action throughput and destabilised learning, particularly for the larger network architectures.
+
+---
+
+# Limitations and Lessons Learned
+
+## Practical Constraints Encountered
+
+- GPU acceleration was unavailable with the selected software stack on the target machine.
+- CPU-bound training introduced high prediction/training latency and a reduced control frequency.
+- Multithreaded training sometimes increased apparent action throughput but could also lead to stale or unsynchronised Q-value updates.
+
+## Observed Training Behaviour
+
+- Larger and deeper models, particularly the Xception-based network, were poorly matched to the available hardware.
+- Some runs exhibited extreme loss values and Q-value spikes, likely associated with resource contention during model checkpoint export.
+- Simpler CNN architectures consistently produced more stable learning under constrained compute resources.
+
+## Key Takeaway
+
+For CARLA + DQN experiments on limited hardware, model simplicity and stable system timing can be more important than architectural complexity.
+
+---
+
+# Reproducibility Notes
+
+To improve reproducibility and debugging, this project includes deterministic-style reset behaviour where possible, episode-level logging, periodic Q-value logging, debug flags, and model export checkpoints.
+
+When reproducing results, the following should remain fixed:
+
+- Map and spawn configuration
+- Reward function constants
+- Network architecture used for each experiment
+- Hardware and software environment (OS, CPU/GPU, TensorFlow/CUDA versions)
+
+---
+
+# Future Work
+
+Potential directions for extending this work include:
+
+- Migrating to a modern reinforcement learning stack with GPU-compatible tooling or a Linux-based training environment.
+- Comparing DQN against Double DQN, Dueling DQN, and policy-gradient methods.
+- Adding richer observations through stacked image frames and vehicle telemetry fusion.
+- Introducing curriculum-based reward shaping, progressing from lane keeping to safe overtaking and speed optimisation.
+- Evaluating robustness across varying weather, lighting conditions, and traffic densities.
+- Implementing automated hyperparameter sweeps and experiment tracking.
+
+---
+
+# Contribution of This Work
+
+Although sustained real-time autonomous behaviour was not achieved, this project contributes:
+
+- A modular CARLA + DQN experimentation framework
+- Documented evidence of compute-bound reinforcement learning failure modes
+- A practical **64x3 CNN** baseline for constrained hardware environments
+
+This repository is intended to serve both as:
+
+- A foundation for future autonomous-driving reinforcement learning experiments
+- A case study demonstrating the trade-offs between model complexity and system-level feasibility
+
+---
+
+# At a Glance
+
+| Item | Summary |
+|------|---------|
+| **Best-performing model** | 64x3 CNN |
+| **Environment** | CARLA Town04 highway scenario |
+| **Action space** | 5 discrete actions |
+| **Main blocker** | GPU/toolchain incompatibility resulting in CPU-only training |
+| **Outcome** | Functional training pipeline with partial learning success, but no sustained real-time autonomous driving |
